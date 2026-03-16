@@ -1,6 +1,3 @@
-# contextql
-Canonical repository for the contextql language
-
 # ContextQL
 
 **ContextQL** is a SQL-first query language for operational intelligence.
