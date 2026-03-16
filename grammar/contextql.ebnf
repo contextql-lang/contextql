@@ -1,0 +1,14 @@
+select_stmt =
+    "SELECT" projection
+    "FROM" relation
+    [ "WHERE" predicate ]
+    [ "ORDER BY" order_clause ]
+    [ "LIMIT" number ] ;
+
+context_predicate =
+    "CONTEXT" "IN" "(" identifier { "," identifier } ")" ;
+
+create_context =
+    "CREATE" "CONTEXT" identifier
+    [ "ON" identifier ]
+    "AS" select_stmt ;
