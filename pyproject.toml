@@ -20,6 +20,10 @@ dependencies = [
 lsp = [
     "pygls>=1.1",
 ]
+executor = [
+    "duckdb>=0.10",
+    "pandas>=2.0",
+]
 dev = [
     "pytest>=7.0",
 ]
