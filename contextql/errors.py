@@ -81,6 +81,20 @@ E117 = ErrorCode("E117", Severity.ERROR, "INCOMPATIBLE_COMPOSITE_KEYS",
                  "composite context children must have type-compatible entity keys")
 E118 = ErrorCode("E118", Severity.ERROR, "ORDERBY_IN_CONTEXT_DEF",
                  "context definition SELECT must not contain ORDER BY")
+E120 = ErrorCode("E120", Severity.ERROR, "MISSING_ENTITY_KEY_DECL",
+                 "CREATE CONTEXT {name!r} is missing an ON entity key declaration")
+E130 = ErrorCode("E130", Severity.ERROR, "EVENT_LOG_MISSING_SOURCE",
+                 "CREATE EVENT LOG {name!r} is missing a FROM source table")
+E131 = ErrorCode("E131", Severity.ERROR, "EVENT_LOG_MISSING_CASE_KEY",
+                 "CREATE EVENT LOG {name!r} is missing ON <case_column>")
+E132 = ErrorCode("E132", Severity.ERROR, "EVENT_LOG_MISSING_ACTIVITY",
+                 "CREATE EVENT LOG {name!r} is missing ACTIVITY <column>")
+E133 = ErrorCode("E133", Severity.ERROR, "EVENT_LOG_MISSING_TIMESTAMP",
+                 "CREATE EVENT LOG {name!r} is missing TIMESTAMP <column>")
+E140 = ErrorCode("E140", Severity.ERROR, "PROCESS_MODEL_NO_PATHS",
+                 "CREATE PROCESS MODEL {name!r} has no EXPECTED PATH clauses")
+E141 = ErrorCode("E141", Severity.ERROR, "UNDEFINED_EVENT_LOG",
+                 "undefined event log {log!r} in CREATE PROCESS MODEL {name!r}")
 
 # ── Semantic warnings (W100-W199) ───────────────────────────────────────
 
