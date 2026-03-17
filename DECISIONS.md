@@ -21,6 +21,7 @@ Decision IDs correspond to the originating document:
 | AD | Architectural decisions (cross-cutting) |
 | GQ | GUARDIAN (security, governance & compliance) |
 | DX | DEVX (developer tooling & experience) |
+| IM | Implementation decisions (parser, tooling) |
 
 Each entry records:
 
@@ -919,11 +920,36 @@ distributed execution
 # Status
 
 ```
-All currently identified decisions resolved.
-Total recorded decisions: 57
+Total recorded decisions: 59
 ```
 
 Future decisions should be appended to this document.
+
+---
+
+# Implementation Decisions (Parser & Tooling)
+
+## IM-1 — Parser technology: Lark (Earley) instead of PEG
+
+**Decision:**
+Use Lark with Earley parser for v1 implementation.
+
+**Rationale:**
+The whitepaper specifies PEG parsing (Section 15.2). However, Lark provides a practical, well-maintained grammar-driven parser with good error messages, `.lark` grammar files, and position tracking out of the box. Earley handles the grammar's ambiguities (e.g., `STAR` as wildcard vs. multiplication, `THEN` in CASE vs. context chains) without requiring the grammar to be rewritten for LL/LR compatibility. This is a v1 pragmatic choice; migration to LALR (still Lark) or a hand-written parser is possible once the grammar stabilizes.
+
+**Version:** v1 (may revisit for v2 performance)
+
+---
+
+## IM-2 — Error code scheme alignment
+
+**Decision:**
+Parser uses `E001`-`E099` for syntax errors. Linter uses `E100`-`E199` for semantic errors and `W001`-`W499` for warnings. This aligns with the whitepaper's Section 35 error taxonomy.
+
+**Rationale:**
+The original scaffold used `CTX001`-`CTX007` for lint rules. The whitepaper defines a comprehensive error code scheme. Aligning to the whitepaper scheme ensures consistency between specification and implementation, and reserves space for future error categories (E200+ runtime, E300+ federation, E400+ lifecycle).
+
+**Version:** v1
 
 ---
 

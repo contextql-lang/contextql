@@ -1,0 +1,36 @@
+{
+  "name": "contextql",
+  "displayName": "ContextQL",
+  "description": "ContextQL Language Support — contexts as first-class query primitives",
+  "version": "0.0.1",
+  "publisher": "adpatza",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:contextql"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "contextql",
+        "aliases": [
+          "ContextQL",
+          "CQL"
+        ],
+        "extensions": [
+          ".cql"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ]
+  },
+  "main": "./extension.js",
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

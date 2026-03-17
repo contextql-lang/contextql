@@ -1,4 +1,22 @@
+# Private / internal
 CLAUDE.md
 agents/
-grammar/
 why_another_query_language.md
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Node (VS Code extension)
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp

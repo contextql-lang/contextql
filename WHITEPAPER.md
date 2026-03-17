@@ -987,7 +987,7 @@ ContextQL uses a pull-based (Volcano-style) execution model with optional vector
          |
   +------v-------+
   | 1. PARSE     |   text --> AST
-  |   (PEG)      |   -- PEG parser, span tracking
+  |   (Earley)   |   -- Lark grammar-driven parser, span tracking
   +------+-------+
          |
   +------v-------+
@@ -1032,7 +1032,7 @@ Each operator implements a `next_batch()` interface returning columnar Arrow Rec
 
 ## 15.2 Stage Details
 
-**PARSE**: Linear-time PEG parser producing dedicated AST node types for context-specific productions.
+**PARSE**: Grammar-driven Earley parser (via Lark) producing concrete syntax trees with position tracking for context-specific productions.
 
 **ANALYZE**: Resolves context names, checks entity key type compatibility, validates CONTEXT ON bindings, THEN chains, WEIGHT values, temporal qualifiers, parameter bindings (named only), and score function scope.
 
@@ -2349,7 +2349,7 @@ A JDBC driver presents ContextQL as a SQL-compatible data source for BI tools (T
 
 ## 38.1 Phase 1: Python Reference Engine
 
-- PEG parser with span tracking for error diagnostics.
+- Grammar-driven Earley parser (Lark) with span tracking for error diagnostics.
 - Semantic analyzer with full type checking and context validation.
 - Cost-based optimizer with materialize vs. recompute decisions.
 - DuckDB as primary execution adapter, Polars as secondary.
@@ -2376,7 +2376,7 @@ Rust modules integrate with Python via PyO3, maintaining the Python API surface.
 
 | Module | Language | Responsibility |
 |--------|----------|---------------|
-| `contextql.parser` | Python (Phase 1), Rust (Phase 2) | PEG parser, AST construction |
+| `contextql.parser` | Python (Phase 1), Rust (Phase 2) | Grammar-driven parser (Lark/Earley), CST construction |
 | `contextql.analyzer` | Python | Semantic analysis, type checking |
 | `contextql.planner` | Python | Logical plan generation |
 | `contextql.optimizer` | Python | Cost-based optimization |
@@ -2616,7 +2616,7 @@ This glossary defines technical terms used throughout the whitepaper that assume
 
 **Parquet** -- An open-source columnar file format optimized for read-heavy analytical workloads with efficient compression. In ContextQL, Parquet is the cold-tier storage format for historical context snapshots and the format for the append-only audit log. *(Section 18.1)*
 
-**PEG (Parsing Expression Grammar)** -- A type of formal grammar that defines a language by specifying how to parse it, with ordered choice eliminating ambiguity. ContextQL uses a PEG parser for deterministic, linear-time parsing of query text. *(Section 15.2)*
+**PEG (Parsing Expression Grammar)** -- A type of formal grammar that defines a language by specifying how to parse it, with ordered choice eliminating ambiguity. ContextQL's v1 implementation uses an Earley parser (via Lark) for practical grammar development; PEG remains a candidate for future performance optimization. *(Section 15.2)*
 
 **PII (Personally Identifiable Information)** -- Data that can identify a specific individual (names, addresses, ID numbers, etc.). ContextQL addresses PII through classification levels, RLS filtering, parameterized query storage in audit logs, and GDPR erasure support. *(Section 27.1)*
 

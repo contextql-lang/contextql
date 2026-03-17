@@ -1,0 +1,438 @@
+// ContextQL starter grammar v0.1
+// Practical grammar scaffold aligned with the whitepaper; not yet normative-complete.
+
+start: statement (SEMICOLON statement)* SEMICOLON?
+
+?statement: select_stmt
+          | create_context_stmt
+          | alter_context_stmt
+          | drop_context_stmt
+          | show_contexts_stmt
+          | describe_context_stmt
+          | refresh_context_stmt
+          | validate_context_stmt
+          | create_event_log_stmt
+          | alter_event_log_stmt
+          | drop_event_log_stmt
+          | show_event_logs_stmt
+          | describe_event_log_stmt
+          | create_process_model_stmt
+          | drop_process_model_stmt
+          | show_process_models_stmt
+          | register_mcp_provider_stmt
+          | register_remote_provider_stmt
+          | grant_stmt
+          | create_namespace_stmt
+          | set_stmt
+
+// =========================
+// SELECT
+// =========================
+select_stmt: context_window_clause? with_clause? SELECT distinct_clause? projection from_clause where_clause? group_by_clause? having_clause? order_by_clause? limit_clause? offset_clause?
+
+context_window_clause: WITH CONTEXT WINDOW int_literal
+with_clause: WITH cte_def (COMMA cte_def)*
+cte_def: identifier AS LPAR select_stmt RPAR
+
+distinct_clause: DISTINCT
+projection: STAR -> project_all
+          | select_item (COMMA select_item)*
+select_item: expr alias?
+alias: AS? identifier
+
+from_clause: FROM table_ref (join_clause)*
+table_ref: qualified_name alias?
+         | remote_source alias?
+         | LPAR select_stmt RPAR alias?
+         | function_table_ref alias?
+
+function_table_ref: HISTOGRAM LPAR expr COMMA int_literal RPAR
+                  | CLUSTER LPAR select_stmt (COMMA named_arg)* RPAR
+
+join_clause: join_type? JOIN table_ref ON predicate
+           | CROSS JOIN table_ref
+join_type: INNER
+         | LEFT OUTER?
+         | RIGHT OUTER?
+         | FULL OUTER?
+
+where_clause: WHERE predicate
+having_clause: HAVING predicate
+group_by_clause: GROUP BY expr (COMMA expr)*
+order_by_clause: ORDER BY order_item (COMMA order_item)*
+order_item: CONTEXT (USING scoring_strategy)? sort_dir?
+          | expr sort_dir? nulls_order?
+scoring_strategy: MAX | MIN | AVG | SUM | COUNT | WEIGHTED_MAX | WEIGHTED_SUM
+sort_dir: ASC | DESC
+nulls_order: NULLS (FIRST | LAST)
+limit_clause: LIMIT int_literal
+offset_clause: OFFSET int_literal
+
+// =========================
+// CONTEXT PREDICATES
+// =========================
+?predicate: or_pred
+?or_pred: and_pred
+        | or_pred OR and_pred   -> or_predicate
+?and_pred: not_pred
+         | and_pred AND not_pred -> and_predicate
+?not_pred: NOT not_pred         -> not_predicate
+         | primary_pred
+?primary_pred: context_predicate
+             | comparison_predicate
+             | in_predicate
+             | between_predicate
+             | like_predicate
+             | is_null_predicate
+             | exists_predicate
+             | LPAR predicate RPAR
+
+context_predicate: CONTEXT context_on_binding? IN context_mode LPAR context_ref_chain RPAR
+                 | CONTEXT context_on_binding? NOT IN LPAR context_ref_list RPAR
+context_on_binding: ON identifier
+context_mode: ALL?   // empty means union mode
+
+context_ref_chain: context_ref_list
+                 | then_chain
+context_ref_list: context_ref (COMMA context_ref)*
+then_chain: context_ref (THEN context_ref)+
+
+context_ref: context_invocation weight_clause? temporal_qualifier?
+weight_clause: WEIGHT numeric_literal
+context_invocation: qualified_name context_call_args?
+                  | MCP LPAR qualified_name RPAR
+context_call_args: LPAR named_arg (COMMA named_arg)* RPAR
+named_arg: identifier ASSIGN expr
+temporal_qualifier: AT literal
+                  | BETWEEN literal AND literal
+
+// =========================
+// EXPRESSIONS
+// =========================
+?expr: concat_expr
+?concat_expr: add_expr
+            | concat_expr CONCAT add_expr -> concat
+?add_expr: mul_expr
+         | add_expr PLUS mul_expr -> add
+         | add_expr MINUS mul_expr -> sub
+?mul_expr: unary_expr
+         | mul_expr STAR unary_expr -> mul
+         | mul_expr DIV unary_expr -> div
+         | mul_expr MOD unary_expr -> mod
+?unary_expr: primary_expr
+           | MINUS unary_expr -> neg
+           | PLUS unary_expr -> pos
+
+?primary_expr: literal
+             | column_ref
+             | function_call
+             | cast_expr
+             | case_expr
+             | context_score_call
+             | context_count_call
+             | throughput_time_between_call
+             | LPAR expr RPAR
+             | LPAR select_stmt RPAR
+
+column_ref: qualified_name
+qualified_name: identifier (DOT identifier)*
+
+function_call: identifier LPAR function_args? RPAR
+function_args: STAR
+             | DISTINCT? expr (COMMA expr)*
+
+context_score_call: CONTEXT_SCORE LPAR RPAR
+context_count_call: CONTEXT_COUNT LPAR RPAR
+throughput_time_between_call: THROUGHPUT_TIME_BETWEEN LPAR expr COMMA expr COMMA expr RPAR event_log_qualifier?
+event_log_qualifier: USING EVENT LOG identifier
+
+cast_expr: CAST LPAR expr AS type_name RPAR
+case_expr: CASE expr? case_when+ case_else? END
+case_when: WHEN predicate THEN expr
+case_else: ELSE expr
+
+type_name: identifier (LPAR int_literal (COMMA int_literal)? RPAR)?
+
+comparison_predicate: expr comp_op expr
+comp_op: EQ | NEQ | LT | GT | LE | GE
+in_predicate: expr NOT? IN LPAR (expr (COMMA expr)* | select_stmt) RPAR
+between_predicate: expr NOT? BETWEEN expr AND expr
+like_predicate: expr NOT? LIKE expr
+is_null_predicate: expr IS NOT? NULL
+exists_predicate: EXISTS LPAR select_stmt RPAR
+
+// =========================
+// CONTEXT DDL
+// =========================
+create_context_stmt: CREATE OR? REPLACE? CONTEXT qualified_name context_params? ON identifier score_clause? temporal_decl? description_clause? tags_clause? classification_clause? context_with_options? AS (select_stmt | compose_clause)
+context_params: LPAR param_def (COMMA param_def)* RPAR
+param_def: identifier type_name (DEFAULT literal)?
+score_clause: SCORE expr
+temporal_decl: TEMPORAL LPAR identifier COMMA temporal_granularity RPAR
+temporal_granularity: SECOND | MINUTE | HOUR | DAY | WEEK | MONTH | QUARTER | YEAR
+description_clause: DESCRIPTION string_literal
+tags_clause: TAGS LPAR string_literal (COMMA string_literal)* RPAR
+classification_clause: CLASSIFICATION identifier
+context_with_options: WITH LPAR context_option (COMMA context_option)* RPAR
+context_option: identifier EQ expr
+compose_clause: COMPOSE LPAR compose_item (COMMA compose_item)* RPAR WITH STRATEGY compose_strategy
+compose_item: qualified_name weight_clause?
+compose_strategy: UNION | INTERSECT | WEIGHTED
+
+alter_context_stmt: ALTER CONTEXT qualified_name alter_context_action
+alter_context_action: RENAME TO qualified_name
+                    | SET DEFINITION AS select_stmt
+                    | SET SCORE expr
+                    | DROP SCORE
+                    | SET DESCRIPTION string_literal
+                    | SET TAGS LPAR string_literal (COMMA string_literal)* RPAR
+                    | SET STATE string_literal
+
+drop_context_stmt: DROP CONTEXT IF? EXISTS? qualified_name (CASCADE | RESTRICT)?
+show_contexts_stmt: SHOW CONTEXTS (LIKE string_literal | WHERE predicate)?
+describe_context_stmt: DESCRIBE CONTEXT qualified_name
+refresh_context_stmt: REFRESH (CONTEXT qualified_name (WITH PARAMETERS LPAR named_arg (COMMA named_arg)* RPAR)? | ALL CONTEXTS (WHERE predicate)?)
+validate_context_stmt: VALIDATE CONTEXT qualified_name
+
+// =========================
+// EVENT LOG DDL
+// =========================
+create_event_log_stmt: CREATE EVENT LOG qualified_name FROM event_source ON identifier ACTIVITY identifier TIMESTAMP identifier (RESOURCE identifier)? (ATTRIBUTES LPAR identifier (COMMA identifier)* RPAR)? description_clause? tags_clause?
+event_source: qualified_name | remote_source
+alter_event_log_stmt: ALTER EVENT LOG qualified_name alter_event_log_action
+alter_event_log_action: SET RESOURCE identifier
+                      | SET DESCRIPTION string_literal
+                      | ADD ATTRIBUTES LPAR identifier (COMMA identifier)* RPAR
+                      | DROP ATTRIBUTES LPAR identifier (COMMA identifier)* RPAR
+drop_event_log_stmt: DROP EVENT LOG IF? EXISTS? qualified_name
+show_event_logs_stmt: SHOW EVENT LOGS (LIKE string_literal)?
+describe_event_log_stmt: DESCRIBE EVENT LOG qualified_name
+
+// =========================
+// PROCESS MODEL DDL
+// =========================
+create_process_model_stmt: CREATE PROCESS MODEL qualified_name (FOR EVENT LOG qualified_name)? expected_path_clause+
+expected_path_clause: EXPECTED PATH LPAR string_literal (COMMA string_literal)* RPAR
+drop_process_model_stmt: DROP PROCESS MODEL IF? EXISTS? qualified_name
+show_process_models_stmt: SHOW PROCESS MODELS
+
+// =========================
+// PROVIDERS / SECURITY / NAMESPACE / SETTINGS
+// =========================
+register_mcp_provider_stmt: REGISTER MCP PROVIDER qualified_name provider_option+
+register_remote_provider_stmt: REGISTER REMOTE PROVIDER qualified_name provider_option+
+provider_option: ENDPOINT string_literal
+               | TRANSPORT identifier
+               | ENTITY_TYPE identifier
+               | ENTITY_KEY_TYPE type_name
+               | RESOURCES LPAR identifier (COMMA identifier)* RPAR
+               | TIMEOUT expr
+               | AUTH identifier+ string_literal
+               | SYSTEM_PREFIX string_literal
+               | DESCRIPTION string_literal
+               | ON_FAILURE identifier
+               | CACHE identifier expr
+
+grant_stmt: GRANT privilege_list ON grant_target TO principal
+privilege_list: identifier (COMMA identifier)*
+grant_target: CONTEXT qualified_name
+            | NAMESPACE identifier
+            | MCP PROVIDER qualified_name
+            | REMOTE PROVIDER qualified_name
+principal: ROLE identifier | USER identifier | SERVICE ACCOUNT identifier
+
+create_namespace_stmt: CREATE NAMESPACE identifier OWNER ROLE identifier
+set_stmt: SET qualified_name EQ expr
+remote_source: REMOTE LPAR qualified_name RPAR
+
+// =========================
+// LEXICAL
+// =========================
+identifier: IDENTIFIER | QUOTED_IDENTIFIER
+
+literal: string_literal
+       | numeric_literal
+       | int_literal
+       | TRUE
+       | FALSE
+       | NULL
+       | date_literal
+       | timestamp_literal
+       | interval_literal
+
+string_literal: STRING
+numeric_literal: NUMBER
+int_literal: INT
+
+date_literal: DATE STRING
+timestamp_literal: TIMESTAMP STRING
+interval_literal: INTERVAL STRING identifier?
+
+SELECT: /SELECT/i
+DISTINCT: /DISTINCT/i
+FROM: /FROM/i
+WHERE: /WHERE/i
+GROUP: /GROUP/i
+BY: /BY/i
+HAVING: /HAVING/i
+ORDER: /ORDER/i
+LIMIT: /LIMIT/i
+OFFSET: /OFFSET/i
+WITH: /WITH/i
+AS: /AS/i
+JOIN: /JOIN/i
+INNER: /INNER/i
+LEFT: /LEFT/i
+RIGHT: /RIGHT/i
+FULL: /FULL/i
+OUTER: /OUTER/i
+CROSS: /CROSS/i
+ON: /ON/i
+CREATE: /CREATE/i
+ALTER: /ALTER/i
+DROP: /DROP/i
+SHOW: /SHOW/i
+DESCRIBE: /DESCRIBE/i
+VALIDATE: /VALIDATE/i
+REFRESH: /REFRESH/i
+ALL: /ALL/i
+CONTEXT: /CONTEXT/i
+CONTEXTS: /CONTEXTS/i
+WINDOW: /WINDOW/i
+EVENT: /EVENT/i
+LOG: /LOG/i
+LOGS: /LOGS/i
+ACTIVITY: /ACTIVITY/i
+TIMESTAMP: /TIMESTAMP/i
+RESOURCE: /RESOURCE/i
+ATTRIBUTES: /ATTRIBUTES/i
+PROCESS: /PROCESS/i
+MODEL: /MODEL/i
+MODELS: /MODELS/i
+FOR: /FOR/i
+EXPECTED: /EXPECTED/i
+PATH: /PATH/i
+SCORE: /SCORE/i
+TEMPORAL: /TEMPORAL/i
+DESCRIPTION: /DESCRIPTION/i
+TAGS: /TAGS/i
+CLASSIFICATION: /CLASSIFICATION/i
+COMPOSE: /COMPOSE/i
+STRATEGY: /STRATEGY/i
+UNION: /UNION/i
+INTERSECT: /INTERSECT/i
+WEIGHTED: /WEIGHTED/i
+WEIGHT: /WEIGHT/i
+THEN: /THEN/i
+IN: /IN/i
+NOT: /NOT/i
+AT: /AT/i
+BETWEEN: /BETWEEN/i
+AND: /AND/i
+OR: /OR/i
+EXISTS: /EXISTS/i
+LIKE: /LIKE/i
+IS: /IS/i
+NULL: /NULL/i
+TRUE: /TRUE/i
+FALSE: /FALSE/i
+CASE: /CASE/i
+WHEN: /WHEN/i
+ELSE: /ELSE/i
+END: /END/i
+CAST: /CAST/i
+USING: /USING/i
+PARAMETERS: /PARAMETERS/i
+STATE: /STATE/i
+RENAME: /RENAME/i
+TO: /TO/i
+DEFAULT: /DEFAULT/i
+SECOND: /SECOND/i
+MINUTE: /MINUTE/i
+HOUR: /HOUR/i
+DAY: /DAY/i
+WEEK: /WEEK/i
+MONTH: /MONTH/i
+QUARTER: /QUARTER/i
+YEAR: /YEAR/i
+FIRST: /FIRST/i
+LAST: /LAST/i
+NULLS: /NULLS/i
+MCP: /MCP/i
+REMOTE: /REMOTE/i
+REGISTER: /REGISTER/i
+PROVIDER: /PROVIDER/i
+PROVIDERS: /PROVIDERS/i
+ENDPOINT: /ENDPOINT/i
+TRANSPORT: /TRANSPORT/i
+ENTITY_TYPE: /ENTITY_TYPE/i
+ENTITY_KEY_TYPE: /ENTITY_KEY_TYPE/i
+RESOURCES: /RESOURCES/i
+TIMEOUT: /TIMEOUT/i
+AUTH: /AUTH/i
+SYSTEM_PREFIX: /SYSTEM_PREFIX/i
+ON_FAILURE: /ON_FAILURE/i
+CACHE: /CACHE/i
+GRANT: /GRANT/i
+ROLE: /ROLE/i
+USER: /USER/i
+SERVICE: /SERVICE/i
+ACCOUNT: /ACCOUNT/i
+NAMESPACE: /NAMESPACE/i
+OWNER: /OWNER/i
+REPLACE: /REPLACE/i
+IF: /IF/i
+CASCADE: /CASCADE/i
+RESTRICT: /RESTRICT/i
+SET: /SET/i
+ADD: /ADD/i
+HISTOGRAM: /HISTOGRAM/i
+CLUSTER: /CLUSTER/i
+PARETO_SUM: /PARETO_SUM/i
+THROUGHPUT_TIME_BETWEEN: /THROUGHPUT_TIME_BETWEEN/i
+CONTEXT_SCORE: /CONTEXT_SCORE/i
+CONTEXT_COUNT: /CONTEXT_COUNT/i
+MAX: /MAX/i
+MIN: /MIN/i
+AVG: /AVG/i
+SUM: /SUM/i
+COUNT: /COUNT/i
+WEIGHTED_MAX: /WEIGHTED_MAX/i
+WEIGHTED_SUM: /WEIGHTED_SUM/i
+ASC: /ASC/i
+DESC: /DESC/i
+DEFINITION: /DEFINITION/i
+DATE: /DATE/i
+INTERVAL: /INTERVAL/i
+
+ASSIGN: ":="
+EQ: "="
+NEQ: "<>" | "!="
+LE: "<="
+GE: ">="
+LT: "<"
+GT: ">"
+PLUS: "+"
+MINUS: "-"
+DIV: "/"
+MOD: "%"
+CONCAT: "||"
+DOT: "."
+COMMA: ","
+LPAR: "("
+RPAR: ")"
+SEMICOLON: ";"
+STAR: "*"
+
+IDENTIFIER: /[A-Za-z_][A-Za-z0-9_]*/
+QUOTED_IDENTIFIER: /"([^"\\]|\\.)*"/
+STRING: /'([^'\\]|\\.|'')*'/
+NUMBER: /[+-]?([0-9]+\.[0-9]+([eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)/
+INT: /[+-]?[0-9]+/
+
+COMMENT: /--[^\n]*/
+BLOCK_COMMENT: /\/\*(.|\n)*?\*\//
+
+%ignore /[ \t\f\r\n]+/
+%ignore COMMENT
+%ignore BLOCK_COMMENT
