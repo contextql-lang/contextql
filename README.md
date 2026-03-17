@@ -48,6 +48,20 @@ The difference is not "can SQL express it?" but "can operational situations beco
 | Federation (MCP/REMOTE) | Designed | See WHITEPAPER.md Sections 22-23 |
 | Security and governance | Designed | See WHITEPAPER.md Sections 24-30 |
 
+## Repository Map
+
+```
+contextql/          Python package (parser, linter, diagnostics, LSP)
+grammar/            Canonical Lark grammar (contextql.lark)
+tests/              pytest suite (120 tests)
+examples/           Runnable demos (lint_demo.py, context_showcase.py)
+vscode-contextql/   VS Code extension (LSP client)
+docs/               Tooling and LSP specifications
+SPEC.md             Language specification (v0.2)
+WHITEPAPER.md       Design whitepaper (43 sections)
+DECISIONS.md        Architectural decisions register (59 decisions)
+```
+
 ## Quick Start
 
 ```bash

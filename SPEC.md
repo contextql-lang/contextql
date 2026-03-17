@@ -7,6 +7,8 @@ Copyright (c) 2026 Anton du Plessis (github/adpatza)
 Specification license: CC-BY-4.0
 Implementation license: Apache 2.0
 
+> **Note**: This specification describes the language as implemented in the reference toolchain (parser, linter, LSP). The grammar at `grammar/contextql.lark` is the normative source. Execution semantics are specified in the whitepaper but not yet implemented.
+
 ---
 
 ## 1. Overview

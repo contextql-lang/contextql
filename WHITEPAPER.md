@@ -2521,7 +2521,7 @@ REGISTER REMOTE PROVIDER name
 
 ContextQL extends **SQL:2016** (ISO/IEC 9075:2016), specifically Part 1 (Framework) and Part 2 (Foundation). ContextQL-specific extensions are clearly delineated and do not alter the semantics of standard SQL constructs. Standard SQL queries pass through unchanged to the execution adapter.
 
-The EBNF grammar for ContextQL is maintained in `grammar/contextql.ebnf` and covers: `select_stmt` with CONTEXT predicates, `create_context_stmt` in all forms, `create_event_log_stmt`, `create_process_model_stmt`, context algebra operators (IN, IN ALL, NOT IN, WEIGHT, THEN), temporal qualifiers (AT, BETWEEN), federation references (MCP, REMOTE), and all companion DDL (ALTER, DROP, SHOW, DESCRIBE, REFRESH, VALIDATE).
+The Lark grammar for ContextQL is maintained in `grammar/contextql.lark` and covers: `select_stmt` with CONTEXT predicates, `create_context_stmt` in all forms, `create_event_log_stmt`, `create_process_model_stmt`, context algebra operators (IN, IN ALL, NOT IN, WEIGHT, THEN), temporal qualifiers (AT, BETWEEN), federation references (MCP, REMOTE), and all companion DDL (ALTER, DROP, SHOW, DESCRIBE, REFRESH, VALIDATE).
 
 ---
 
@@ -2623,7 +2623,7 @@ This glossary defines technical terms used throughout the whitepaper that assume
 
 **DPIA (Data Protection Impact Assessment)** -- A process required by GDPR (Article 35) to identify and minimize data protection risks of a project. ContextQL's classification and audit mechanisms support organizations conducting DPIAs for context-bearing workloads. *(Section 28)*
 
-**EBNF (Extended Backus-Naur Form)** -- A notation for formally specifying the grammar of a language. ContextQL's syntax rules are defined in EBNF in `grammar/contextql.ebnf`, covering context statements, event log declarations, and query constructs. *(Section 40)*
+**EBNF (Extended Backus-Naur Form)** -- A notation for formally specifying the grammar of a language. ContextQL's grammar was originally written in EBNF; the canonical grammar is now in Lark format at `grammar/contextql.lark`, covering context statements, event log declarations, and query constructs. *(Section 40)*
 
 **Entity set** -- The set of entity IDs that belong to a context after evaluation. Stored physically as a roaring bitmap in the hot tier. Set operations (union, intersection, difference) on entity sets correspond directly to the context algebra. *(Section 5.2.2)*
 
@@ -2639,7 +2639,7 @@ This glossary defines technical terms used throughout the whitepaper that assume
 
 **Left-associative** -- A property of an operator that determines grouping when the operator appears multiple times in sequence. `A THEN B THEN C` is left-associative, meaning it groups as `(A THEN B) THEN C`: the first two operands are combined first, then the result is combined with the third. *(Section 6.6)*
 
-**LSP (Language Server Protocol)** -- A standardized protocol for communication between a code editor and a language server that provides features like auto-completion, diagnostics, and go-to-definition. ContextQL plans an LSP server for IDE integration. *(Section 38.1)*
+**LSP (Language Server Protocol)** -- A standardized protocol for communication between a code editor and a language server that provides features like auto-completion, diagnostics, and go-to-definition. ContextQL includes an LSP server implemented with pygls at `contextql/lsp/server.py`. *(Section 38.1)*
 
 **Materialized view** -- A database object that stores the precomputed result of a query. ContextQL's context materialization is analogous: the entity set and scores are computed once and cached in bitmap/Arrow form, then served from cache until staleness triggers a refresh. *(Section 19.1)*
 
