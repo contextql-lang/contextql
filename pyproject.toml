@@ -17,9 +17,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-engine = [
-    "duckdb>=0.9",
-]
 lsp = [
     "pygls>=1.1",
 ]

@@ -41,15 +41,17 @@ The language server depends on:
 
 ## 2. Supported LSP Features
 
-| Feature | v1 |
-|--------|----|
-| diagnostics | YES |
-| completion | YES |
-| hover | YES |
-| go-to-definition | YES |
-| document symbols | YES |
-| rename | NO |
-| code actions | Limited |
+Implementation: `contextql/lsp/server.py` (pygls v2)
+
+| Feature | v1 Spec | Implemented |
+|---------|---------|-------------|
+| diagnostics | YES | YES — real parser + linter |
+| completion | YES | YES — keywords + catalog |
+| hover | YES | YES — keyword docs |
+| go-to-definition | YES | Planned |
+| document symbols | YES | YES — CREATE statements |
+| rename | NO | NO |
+| code actions | Limited | Planned |
 
 ---
 

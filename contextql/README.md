@@ -1,93 +1,43 @@
-# What This Starter Pack Gives You
+# ContextQL Python Package
 
-## 1. A practical grammar scaffold
+## Module Overview
 
-`grammar/contextql.lark` includes starter support for:
+| Module | Purpose |
+|--------|---------|
+| `parser.py` | Lark-based parser wrapping `grammar/contextql.lark`. Earley parser with position tracking and friendly error messages. |
+| `linter.py` | Semantic analyzer with 11 lint rules (E100-E118, W001-W004). Catalog-aware: understands context definitions, entity key types, dependencies. |
+| `diagnostics.py` | Rich Rust/Elm-style diagnostic renderer with source annotations, underlines, and suggestions. |
+| `errors.py` | Error code registry. E001-E099 syntax, E100-E199 semantic, W001-W499 warnings. |
+| `types.py` | Type lattice and entity key type definitions for semantic checking. |
+| `lsp/server.py` | Language Server Protocol server (pygls v2). Real-time diagnostics, completions, hover, document symbols. |
 
-- `SELECT`
-- `CREATE / ALTER / DROP CONTEXT`
-- `CREATE / ALTER / DROP EVENT LOG`
-- `CREATE / DROP PROCESS MODEL`
-- `SHOW / DESCRIBE / REFRESH / VALIDATE`
-- `CONTEXT IN`
-- `CONTEXT ON`
-- `WEIGHT`
-- `THEN`
-- `AT / BETWEEN`
-- `MCP(...)`
-- `REMOTE(...)`
-- provider registration
-- namespace / grant / set basics
+## API Stability
 
-It is intentionally a **tooling grammar first**, not yet your final normative grammar.
+The parser and linter expose stable APIs:
 
----
+- `ContextQLParser.parse(text) -> lark.Tree`
+- `ContextQLLinter.lint(text) -> list[LintDiagnostic]`
+- `Catalog` with `add_context()`, `add_table()`, `add_event_log()`
 
-## 2. A parser scaffold
+These are tooling-facing contracts. They must remain stable even as the execution engine evolves.
 
-`contextql/parser.py` provides:
+## Grammar
 
-- stable parse API
-- normalized syntax errors
-- file parsing
-- parse tree dumping for debugging
+The canonical grammar is `grammar/contextql.lark` (Lark/Earley). It supports 27 statement types including SELECT, context DDL, event log DDL, process model DDL, provider registration, security, and administration.
 
-This is the right boundary for:
+## Lint Rules
 
-- CLI
-- tests
-- future LSP
-- future semantic analyzer
-
----
-
-## 3. A linter scaffold
-
-`contextql/linter.py` provides a minimal semantic pass with starter rules:
-
-- `CTX001` undefined context
-- `CTX002` `ORDER BY CONTEXT` without `WHERE CONTEXT IN`
-- `CTX003` `CONTEXT_SCORE()` outside context query
-- `CTX004` `CONTEXT WINDOW` without scores
-- `CTX005` temporal qualifier on non-temporal context
-- `CTX006` negative weight
-- `CTX007` joined query missing explicit `CONTEXT ON`
-
-This is enough to begin building the editor experience before the full engine exists.
-
----
-
-## 4. Language server and tooling specs
-
-You asked for the minimal architecture earlier.  
-The two docs included are now ready to become repo artifacts:
-
-- `docs/LANGUAGE_SERVER_SPEC.md`
-- `docs/TOOLING.md`
-
-These define the expected shape of:
-
-- LSP features
-- diagnostics contract
-- completion sources
-- parser/linter boundaries
-- tooling stability expectations
-
----
-
-## 5. Why this is the right next step
-
-This sequencing is strong:
-
-```text
-whitepaper
-→ grammar
-→ parser
-→ linter
-→ language server
-→ engine
-```
-
-Because the grammar/linter/language server become the **developer-facing contract**.
-
-That contract should stabilize before deep executor work.
+| Code | Severity | Description |
+|------|----------|-------------|
+| E001 | error | Syntax error |
+| E100 | error | Undefined context |
+| E102 | error | Entity key type mismatch |
+| E103 | error | Circular context dependency |
+| E107 | error | ORDER BY CONTEXT without WHERE CONTEXT IN |
+| E108 | error | CONTEXT_SCORE() outside context query |
+| E109 | error | Temporal qualifier on non-temporal context |
+| E110 | error | Negative weight |
+| E118 | error | ORDER BY in context definition |
+| W001 | warning | CONTEXT WINDOW without scored contexts |
+| W002 | warning | Joined query missing CONTEXT ON |
+| W004 | warning | Weight of zero |

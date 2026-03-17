@@ -79,27 +79,33 @@ Responsibilities:
 
 ### 2.4 Language Server
 
-Canonical future module:
+Canonical module (implemented):
 
 ```text
-contextql/lsp_server.py
+contextql/lsp/server.py
 ```
 
-Responsibilities:
-- completions
-- hover
-- diagnostics
+Entry point: `contextql-lsp` (installed via `pip install -e ".[lsp]"`)
+
+Implemented features:
+- diagnostics (real-time via parser + linter)
+- completions (keywords + catalog contexts)
+- hover (keyword documentation)
+- document symbols (CREATE CONTEXT / EVENT LOG / PROCESS MODEL)
+
+Planned:
 - go-to-definition
+- catalog-aware completions from live metadata
 
 ### 2.5 CLI
 
-Canonical future module:
+Planned future module:
 
 ```text
 contextql/cli.py
 ```
 
-Responsibilities:
+Planned features:
 - validate
 - parse
 - lint

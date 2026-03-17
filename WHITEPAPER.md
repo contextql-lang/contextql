@@ -103,6 +103,43 @@ The architecture introduces a new operational layer called **Context Operations 
 
 ---
 
+## Implementation Status (v0.2)
+
+This whitepaper describes the complete ContextQL architecture. The following table clarifies what is implemented, what is specified as reference architecture, and what is deferred.
+
+### Implemented
+
+- Language grammar — `grammar/contextql.lark` (27 statement types, full expression grammar)
+- Parser with error recovery — `contextql/parser.py`
+- Semantic linter with 11 rules — `contextql/linter.py`
+- Rich diagnostic renderer (Rust/Elm-style) — `contextql/diagnostics.py`
+- Error code registry — `contextql/errors.py`
+- Type system definitions — `contextql/types.py`
+- Language Server Protocol server — `contextql/lsp/server.py`
+- VS Code extension — `vscode-contextql/`
+
+### Specified (Reference Architecture)
+
+- Retrieval execution model (Sections 15-17)
+- Physical storage model (Section 18)
+- Context Operations lifecycle (Sections 19-21)
+- Process intelligence functions (Sections 13-14)
+
+### Designed (Protocol Surface)
+
+- Federated context providers — MCP and REMOTE (Section 22)
+- Global Entity Namespace and identity resolution (Section 23)
+- Security, governance, and compliance (Sections 24-30)
+
+### Deferred to v2
+
+- Multi-node distribution
+- Streaming integration
+- OCEL support
+- LLM-driven context synthesis (Section 34)
+
+---
+
 # 1. Introduction
 
 Organizations increasingly require systems that answer questions such as:
