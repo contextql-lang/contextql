@@ -363,7 +363,8 @@ class SemanticLowerer:
         # WHERE text (full predicate including CONTEXT predicates)
         for sub in self._iter_subtrees(node, "where_clause"):
             for child in sub.children:
-                if isinstance(child, Tree) and child.data == "predicate":
+                if isinstance(child, Tree):
+                    # capture any Tree after WHERE — the predicate (any variant)
                     model.where_text = self._tree_text(child)
                     break
 

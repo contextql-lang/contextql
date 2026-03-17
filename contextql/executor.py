@@ -345,7 +345,13 @@ class ContextQLExecutor:
             # Stub behavior for now: no members
             return pd.Series([False] * len(df), index=df.index)
 
-        ctx = self.adapter.get_context(ref.name)
+        try:
+            ctx = self.adapter.get_context(ref.name)
+        except KeyError:
+            raise ValueError(
+                f"Context '{ref.name}' is not registered in the adapter. "
+                "Call register_context() before executing queries that reference it."
+            )
         key_col = self._resolve_dataframe_key_column(df, pred, ctx.entity_key_name)
         values = df[key_col]
 
