@@ -42,7 +42,10 @@ The difference is not "can SQL express it?" but "can operational situations beco
 | Type system definitions | Implemented | `contextql/types.py` |
 | Language Server (LSP) | Implemented | `contextql/lsp/server.py` |
 | VS Code extension | Implemented | `vscode-contextql/` |
-| Execution engine | Specified | See WHITEPAPER.md Sections 15-18 |
+| Execution engine (DuckDB) | Implemented | `contextql/executor.py`, `contextql/__init__.py` |
+| Python SDK (Engine, QueryBuilder) | Implemented | `contextql/__init__.py`, `contextql/_builder.py` |
+| CLI (`cql`) | Implemented | `contextql/cli.py` |
+| Jupyter magic (`%%cql`) | Implemented | `contextql/_magic.py` |
 | Context Ops lifecycle | Specified | See WHITEPAPER.md Sections 19-21 |
 | Process intelligence functions | Specified | See WHITEPAPER.md Sections 13-14 |
 | Federation (MCP/REMOTE) | Designed | See WHITEPAPER.md Sections 22-23 |
@@ -51,12 +54,23 @@ The difference is not "can SQL express it?" but "can operational situations beco
 ## Repository Map
 
 ```
-contextql/          Python package (parser, linter, diagnostics, LSP)
+contextql/          Python package
+  __init__.py       Public API: Engine, Result, CatalogProxy, demo()
+  executor.py       Hybrid DuckDB executor with context algebra
+  semantic.py       SemanticLowerer, SemanticAnalyzer, InMemoryCatalog
+  _builder.py       QueryBuilder fluent API
+  _magic.py         Jupyter magic (%%cql, %cql_setup, %cql_contexts)
+  cli.py            cql CLI entry point
+  adapters/         DuckDB adapter
+  lsp/server.py     pygls-based LSP server
+  parser.py         Lark-based parser
+  linter.py         Semantic linter (11 rules)
 grammar/            Canonical Lark grammar (contextql.lark)
-tests/              pytest suite (120 tests)
+tests/              pytest suite (283 tests)
 examples/           Runnable demos (lint_demo.py, context_showcase.py)
 vscode-contextql/   VS Code extension (LSP client)
 docs/               Tooling and LSP specifications
+agents/             Specialist agent specs and drafts
 SPEC.md             Language specification (v0.2)
 WHITEPAPER.md       Design whitepaper (43 sections)
 DECISIONS.md        Architectural decisions register (59 decisions)
@@ -65,8 +79,32 @@ DECISIONS.md        Architectural decisions register (59 decisions)
 ## Quick Start
 
 ```bash
-# Install
-pip install -e .
+# Install with execution engine
+pip install -e ".[executor]"
+
+# Run a context query against demo data
+python -c "
+import contextql as cql
+e = cql.demo()
+r = e.execute('SELECT invoice_id, amount FROM invoices WHERE CONTEXT IN (overdue_invoice) ORDER BY CONTEXT DESC LIMIT 5;')
+r.show()
+"
+
+# Fluent builder API
+python -c "
+import contextql as cql
+e = cql.demo()
+r = (e.query('invoices')
+      .select('invoice_id', 'amount', 'CONTEXT_SCORE() AS score')
+      .where_context('overdue_invoice')
+      .order_by_context()
+      .limit(5)
+      .execute())
+r.show()
+"
+
+# Interactive REPL
+cql demo
 
 # Parse a query
 python -c "
@@ -75,9 +113,6 @@ p = ContextQLParser()
 tree = p.parse('SELECT * FROM invoices WHERE CONTEXT IN (late_invoice);')
 print(tree.pretty())
 "
-
-# Run the linter
-python examples/lint_demo.py
 
 # Install with LSP support
 pip install -e ".[lsp]"

@@ -10,13 +10,15 @@ Implementation license: Apache 2.0
 
 This document defines the minimum tooling surface required to make ContextQL usable as a real language rather than just a whitepaper artifact.
 
-The tooling stack has five parts:
+The tooling stack has seven parts:
 
 - grammar
 - parser
 - linter
+- execution engine + Python SDK
 - language server
-- CLI / test harness
+- CLI
+- Jupyter magic
 
 ---
 
@@ -99,17 +101,70 @@ Planned:
 
 ### 2.5 CLI
 
-Planned future module:
+Implemented. Entry point: `cql` (installed via `pip install -e ".[executor]"`).
 
-```text
-contextql/cli.py
+```bash
+cql                        # interactive REPL (bare engine)
+cql demo                   # interactive REPL with pre-loaded demo data
+cql demo --file query.cql  # run a .cql file against demo data
+cql explain "SELECT ..."   # print the query plan
 ```
 
-Planned features:
-- validate
-- parse
-- lint
-- test
+The REPL accepts multi-line queries terminated with `;`. Use `\d` to list tables and contexts, `\q` to quit. Output formats: `table` (default), `json`, `csv` via `--format`.
+
+### 2.6 Python SDK
+
+Implemented. Install: `pip install -e ".[executor]"`.
+
+```python
+import contextql as cql
+
+# Engine
+e = cql.demo()                          # pre-loaded demo data
+e = cql.Engine()                        # blank engine
+e.register_table("t", df, primary_key="id")
+e.register_context("ctx", "SELECT id FROM t WHERE ...", entity_key="id")
+
+# Direct execution
+result = e.execute("SELECT ... WHERE CONTEXT IN (ctx);")
+result.show()                           # formatted print + row count
+result.row_count                        # int
+result.columns                          # List[str]
+result.to_pandas()                      # pandas DataFrame
+result.to_arrow()                       # pyarrow.Table (requires pyarrow extra)
+result.to_polars()                      # polars DataFrame (requires polars extra)
+
+# Fluent builder
+result = (e.query("invoices")
+           .select("invoice_id", "CONTEXT_SCORE() AS score")
+           .where_context("overdue_invoice")
+           .order_by_context()
+           .limit(10)
+           .execute())
+
+# @context decorator
+@e.context("high_value", entity_key="invoice_id")
+def high_value():
+    return "SELECT invoice_id FROM invoices WHERE amount > 10000"
+```
+
+### 2.7 Jupyter Magic
+
+Implemented. Load with `%load_ext contextql`.
+
+```python
+%cql_setup demo          # create demo engine → _cql_engine
+%cql_setup engine        # use existing 'engine' variable from namespace
+%cql_contexts            # list registered tables and contexts
+
+%%cql                    # execute cell; result stored in _cql_result
+SELECT invoice_id FROM invoices WHERE CONTEXT IN (open_invoice) LIMIT 5;
+
+%%cql my_result          # execute cell; result stored in my_result
+SELECT ...
+```
+
+`%%cql` displays the result as a DataFrame inline and stores the `Result` object in the named variable.
 
 ---
 
