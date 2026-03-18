@@ -11,6 +11,7 @@ Example usage::
     class FraudModelProvider:
         def resolve(self, entity_type, params, limit=None):
             return MCPResult(
+                entity_type=entity_type,
                 entity_ids=[1, 5, 10],
                 scores=[0.95, 0.80, 0.70],
             )
@@ -28,7 +29,7 @@ Example usage::
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 
@@ -37,11 +38,14 @@ class MCPResult:
     """Result returned by an :class:`MCPProvider`.
 
     Attributes:
+        entity_type: The entity type this result applies to (e.g. ``"invoices"``).
+            Must match the entity type the executor expects for the query.
         entity_ids: Ordered list of entity IDs that belong to this context.
         scores: Optional per-entity relevance scores, parallel to *entity_ids*.
             If ``None``, all members receive a score of 1.0 in scoring calculations.
     """
 
+    entity_type: str
     entity_ids: list[Any]
     scores: list[float] | None = None
 
@@ -52,9 +56,10 @@ class RemoteResult:
 
     Attributes:
         rows: Fetched rows as a list of dicts (column → value).
+            A pandas DataFrame or Arrow Table may also be supplied in future versions.
     """
 
-    rows: list[dict]
+    rows: list[dict] | Any  # list[dict] canonical; DataFrame/Arrow accepted in future
 
 
 @runtime_checkable

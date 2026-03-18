@@ -39,13 +39,13 @@ def engine():
 class _TopInvoices:
     """Returns ids [1, 4] with scores [0.9, 0.7]."""
     def resolve(self, entity_type, params, limit=None):
-        return MCPResult(entity_ids=[1, 4], scores=[0.9, 0.7])
+        return MCPResult(entity_type=entity_type, entity_ids=[1, 4], scores=[0.9, 0.7])
 
 
 class _AllInvoicesNoScores:
     """Returns ids [1, 2, 3] without scores."""
     def resolve(self, entity_type, params, limit=None):
-        return MCPResult(entity_ids=[1, 2, 3])
+        return MCPResult(entity_type=entity_type, entity_ids=[1, 2, 3])
 
 
 class _ParamCapture:
@@ -55,14 +55,14 @@ class _ParamCapture:
 
     def resolve(self, entity_type, params, limit=None):
         self.captured_params = dict(params)
-        return MCPResult(entity_ids=[1])
+        return MCPResult(entity_type=entity_type, entity_ids=[1])
 
 
 class _SleepyProvider:
     """Simulates a slow provider."""
     def resolve(self, entity_type, params, limit=None):
         time.sleep(10)
-        return MCPResult(entity_ids=[1])
+        return MCPResult(entity_type=entity_type, entity_ids=[1])
 
 
 # ── REMOTE provider helpers ───────────────────────────────────────────────────
@@ -125,13 +125,25 @@ class TestMCPRegistration:
         assert isinstance(_TopInvoices(), MCPProvider)
 
     def test_mcp_result_is_dataclass(self):
-        r = MCPResult(entity_ids=[1, 2], scores=[0.5, 0.3])
+        r = MCPResult(entity_type="invoices", entity_ids=[1, 2], scores=[0.5, 0.3])
+        assert r.entity_type == "invoices"
         assert r.entity_ids == [1, 2]
         assert r.scores == [0.5, 0.3]
 
     def test_mcp_result_scores_optional(self):
-        r = MCPResult(entity_ids=[1, 2])
+        r = MCPResult(entity_type="invoices", entity_ids=[1, 2])
         assert r.scores is None
+
+    def test_mcp_entity_type_mismatch_raises(self, engine):
+        class WrongTypeProvider:
+            def resolve(self, entity_type, params, limit=None):
+                return MCPResult(entity_type="widgets", entity_ids=[1])
+
+        engine.register_mcp_provider("wrong", WrongTypeProvider())
+        with pytest.raises(ValueError, match="entity_type"):
+            engine.execute(
+                "SELECT invoice_id FROM invoices WHERE CONTEXT IN (MCP(wrong));"
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

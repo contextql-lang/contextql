@@ -454,12 +454,13 @@ class ContextQLExecutor:
                     "that reference it."
                 )
 
-            if ref.name not in self._mcp_result_cache:
-                entity_type = pred.binding_alias or (
-                    query.from_table.name if query.from_table else ""
-                )
-                params = {p.name: p.value for p in ref.parameters}
+            entity_type = pred.binding_alias or (
+                query.from_table.name if query.from_table else ""
+            )
+            params = {p.name: p.value for p in ref.parameters}
+            cache_key = (ref.name, entity_type, frozenset(params.items()))
 
+            if cache_key not in self._mcp_result_cache:
                 with ThreadPoolExecutor(max_workers=1) as ex:
                     future = ex.submit(
                         provider.resolve,
@@ -484,9 +485,16 @@ class ContextQLExecutor:
                         )
                         return pd.Series([False] * len(df), index=df.index)
 
-                self._mcp_result_cache[ref.name] = mcp_result
+                if mcp_result.entity_type != entity_type:
+                    raise ValueError(
+                        f"MCP provider '{ref.name}' returned entity_type "
+                        f"'{mcp_result.entity_type}' but query expected "
+                        f"'{entity_type}'."
+                    )
 
-            mcp_result = self._mcp_result_cache[ref.name]
+                self._mcp_result_cache[cache_key] = mcp_result
+
+            mcp_result = self._mcp_result_cache[cache_key]
             entity_ids = set(mcp_result.entity_ids)
             key_col = self._get_mcp_entity_key(df, query)
             return df[key_col].isin(entity_ids)
@@ -552,7 +560,12 @@ class ContextQLExecutor:
                 membership = self._evaluate_single_context(df, query, pred, ref)
 
                 if ref.source_kind == "MCP":
-                    mcp_result = self._mcp_result_cache.get(ref.name)
+                    _et = pred.binding_alias or (
+                        query.from_table.name if query.from_table else ""
+                    )
+                    _params = {p.name: p.value for p in ref.parameters}
+                    _ck = (ref.name, _et, frozenset(_params.items()))
+                    mcp_result = self._mcp_result_cache.get(_ck)
                     if mcp_result is not None and mcp_result.scores is not None:
                         score_map = dict(zip(mcp_result.entity_ids, mcp_result.scores))
                         key_col = self._get_mcp_entity_key(df, query)
