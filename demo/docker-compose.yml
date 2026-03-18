@@ -1,0 +1,526 @@
+name: contextql-demo
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: contextql-demo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: contextql_demo
+      POSTGRES_USER: contextql
+      POSTGRES_PASSWORD: contextql
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - demo_net
+
+  postgres-seed:
+    image: postgres:16
+    container_name: contextql-demo-postgres-seed
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: contextql
+      POSTGRES_DB: contextql_demo
+      POSTGRES_USER: contextql
+    command:
+      - sh
+      - -lc
+      - |
+        psql -v ON_ERROR_STOP=1 -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" <<'SQL'
+        CREATE SCHEMA IF NOT EXISTS finance;
+        CREATE SCHEMA IF NOT EXISTS ops;
+        CREATE SCHEMA IF NOT EXISTS support;
+
+        CREATE TABLE IF NOT EXISTS finance.vendors (
+          vendor_id INTEGER PRIMARY KEY,
+          vendor_name TEXT NOT NULL,
+          country TEXT NOT NULL,
+          risk_tier TEXT NOT NULL,
+          on_watchlist BOOLEAN NOT NULL,
+          preferred_payment_terms_days INTEGER NOT NULL,
+          category TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS finance.invoices (
+          invoice_id INTEGER PRIMARY KEY,
+          vendor_id INTEGER NOT NULL REFERENCES finance.vendors(vendor_id),
+          invoice_date DATE NOT NULL,
+          due_date DATE NOT NULL,
+          amount NUMERIC(12, 2) NOT NULL,
+          currency TEXT NOT NULL,
+          status TEXT NOT NULL,
+          payment_date DATE,
+          dispute_flag BOOLEAN NOT NULL DEFAULT FALSE,
+          po_number TEXT NOT NULL,
+          cost_center TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS finance.payments (
+          payment_id BIGSERIAL PRIMARY KEY,
+          invoice_id INTEGER NOT NULL REFERENCES finance.invoices(invoice_id),
+          paid_amount NUMERIC(12, 2) NOT NULL,
+          paid_date DATE NOT NULL,
+          payment_method TEXT NOT NULL,
+          settlement_status TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS ops.orders (
+          order_id INTEGER PRIMARY KEY,
+          vendor_id INTEGER NOT NULL REFERENCES finance.vendors(vendor_id),
+          region TEXT NOT NULL,
+          priority TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL,
+          current_status TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS ops.order_events (
+          event_id BIGSERIAL PRIMARY KEY,
+          order_id INTEGER NOT NULL REFERENCES ops.orders(order_id),
+          activity TEXT NOT NULL,
+          event_time TIMESTAMPTZ NOT NULL,
+          resource TEXT NOT NULL,
+          state TEXT NOT NULL,
+          payload JSONB NOT NULL DEFAULT '{}'::jsonb
+        );
+
+        CREATE TABLE IF NOT EXISTS support.tickets (
+          ticket_id INTEGER PRIMARY KEY,
+          vendor_id INTEGER NOT NULL REFERENCES finance.vendors(vendor_id),
+          order_id INTEGER REFERENCES ops.orders(order_id),
+          created_at TIMESTAMPTZ NOT NULL,
+          severity TEXT NOT NULL,
+          status TEXT NOT NULL,
+          backlog_hours INTEGER NOT NULL,
+          assigned_team TEXT NOT NULL
+        );
+
+        TRUNCATE TABLE
+          support.tickets,
+          ops.order_events,
+          ops.orders,
+          finance.payments,
+          finance.invoices,
+          finance.vendors
+        RESTART IDENTITY CASCADE;
+
+        INSERT INTO finance.vendors (
+          vendor_id,
+          vendor_name,
+          country,
+          risk_tier,
+          on_watchlist,
+          preferred_payment_terms_days,
+          category
+        )
+        SELECT
+          g,
+          'Vendor ' || LPAD(g::TEXT, 3, '0'),
+          CASE g % 6
+            WHEN 0 THEN 'US'
+            WHEN 1 THEN 'DE'
+            WHEN 2 THEN 'GB'
+            WHEN 3 THEN 'ZA'
+            WHEN 4 THEN 'AE'
+            ELSE 'SG'
+          END,
+          CASE
+            WHEN g % 10 = 0 THEN 'critical'
+            WHEN g % 4 = 0 THEN 'high'
+            WHEN g % 3 = 0 THEN 'medium'
+            ELSE 'low'
+          END,
+          g % 13 = 0,
+          15 + (g % 4) * 15,
+          CASE g % 5
+            WHEN 0 THEN 'logistics'
+            WHEN 1 THEN 'software'
+            WHEN 2 THEN 'manufacturing'
+            WHEN 3 THEN 'consulting'
+            ELSE 'raw-materials'
+          END
+        FROM generate_series(1, 60) AS g;
+
+        INSERT INTO finance.invoices (
+          invoice_id,
+          vendor_id,
+          invoice_date,
+          due_date,
+          amount,
+          currency,
+          status,
+          payment_date,
+          dispute_flag,
+          po_number,
+          cost_center
+        )
+        SELECT
+          g,
+          ((g - 1) % 60) + 1,
+          CURRENT_DATE - ((g * 3) % 180),
+          (CURRENT_DATE - ((g * 3) % 180)) + (15 + (g % 45)),
+          ROUND((250 + ((g * 137) % 24000))::NUMERIC, 2),
+          CASE
+            WHEN g % 19 = 0 THEN 'EUR'
+            WHEN g % 17 = 0 THEN 'GBP'
+            ELSE 'USD'
+          END,
+          CASE
+            WHEN g % 11 = 0 THEN 'disputed'
+            WHEN g % 5 = 0 THEN 'paid'
+            WHEN CURRENT_DATE > ((CURRENT_DATE - ((g * 3) % 180)) + (15 + (g % 45))) THEN 'open'
+            ELSE 'approved'
+          END,
+          CASE
+            WHEN g % 5 = 0 THEN ((CURRENT_DATE - ((g * 3) % 180)) + (15 + (g % 45)) + ((g % 8) - 2))::DATE
+            ELSE NULL
+          END,
+          g % 11 = 0,
+          'PO-' || LPAD((((g * 7) % 90) + 1)::TEXT, 5, '0'),
+          CASE g % 4
+            WHEN 0 THEN 'OPS'
+            WHEN 1 THEN 'FIN'
+            WHEN 2 THEN 'RND'
+            ELSE 'GTM'
+          END
+        FROM generate_series(1, 240) AS g;
+
+        INSERT INTO finance.payments (
+          invoice_id,
+          paid_amount,
+          paid_date,
+          payment_method,
+          settlement_status
+        )
+        SELECT
+          invoice_id,
+          amount,
+          payment_date,
+          CASE invoice_id % 4
+            WHEN 0 THEN 'wire'
+            WHEN 1 THEN 'ach'
+            WHEN 2 THEN 'card'
+            ELSE 'manual'
+          END,
+          CASE
+            WHEN payment_date > due_date THEN 'late'
+            ELSE 'on_time'
+          END
+        FROM finance.invoices
+        WHERE payment_date IS NOT NULL;
+
+        INSERT INTO ops.orders (
+          order_id,
+          vendor_id,
+          region,
+          priority,
+          created_at,
+          current_status
+        )
+        SELECT
+          g,
+          ((g - 1) % 60) + 1,
+          CASE g % 4
+            WHEN 0 THEN 'emea'
+            WHEN 1 THEN 'us-east'
+            WHEN 2 THEN 'apac'
+            ELSE 'latam'
+          END,
+          CASE
+            WHEN g % 9 = 0 THEN 'expedite'
+            WHEN g % 5 = 0 THEN 'review'
+            ELSE 'standard'
+          END,
+          NOW() - make_interval(days => (g % 35), hours => (g % 24)),
+          CASE
+            WHEN g % 10 = 0 THEN 'stalled'
+            WHEN g % 6 = 0 THEN 'shipped'
+            ELSE 'in_flight'
+          END
+        FROM generate_series(1, 150) AS g;
+
+        INSERT INTO ops.order_events (
+          order_id,
+          activity,
+          event_time,
+          resource,
+          state,
+          payload
+        )
+        SELECT
+          o.order_id,
+          'Create',
+          o.created_at,
+          'portal',
+          'done',
+          jsonb_build_object('source', 'erp', 'region', o.region)
+        FROM ops.orders AS o
+        UNION ALL
+        SELECT
+          o.order_id,
+          'Approve',
+          o.created_at + make_interval(hours => 4 + (o.order_id % 30)),
+          CASE WHEN o.order_id % 7 = 0 THEN 'manual-review' ELSE 'auto-approval' END,
+          'done',
+          jsonb_build_object('priority', o.priority)
+        FROM ops.orders AS o
+        WHERE o.order_id % 8 <> 0
+        UNION ALL
+        SELECT
+          o.order_id,
+          'Pick',
+          o.created_at + make_interval(hours => 10 + (o.order_id % 48)),
+          CASE WHEN o.order_id % 5 = 0 THEN 'warehouse-b' ELSE 'warehouse-a' END,
+          'done',
+          jsonb_build_object('queue_bucket', (o.order_id % 6))
+        FROM ops.orders AS o
+        WHERE o.order_id % 10 <> 0
+        UNION ALL
+        SELECT
+          o.order_id,
+          'Ship',
+          o.created_at + make_interval(hours => 36 + (o.order_id % 72)),
+          CASE WHEN o.order_id % 4 = 0 THEN 'carrier-x' ELSE 'carrier-y' END,
+          'done',
+          jsonb_build_object('sla_class', CASE WHEN o.priority = 'expedite' THEN 'gold' ELSE 'standard' END)
+        FROM ops.orders AS o
+        WHERE o.order_id % 6 = 0
+        UNION ALL
+        SELECT
+          o.order_id,
+          'Escalate',
+          o.created_at + make_interval(hours => 12 + (o.order_id % 24)),
+          'ops-control',
+          'alert',
+          jsonb_build_object('reason', 'aging_sla')
+        FROM ops.orders AS o
+        WHERE o.order_id % 9 = 0;
+
+        INSERT INTO support.tickets (
+          ticket_id,
+          vendor_id,
+          order_id,
+          created_at,
+          severity,
+          status,
+          backlog_hours,
+          assigned_team
+        )
+        SELECT
+          g,
+          ((g - 1) % 60) + 1,
+          ((g - 1) % 150) + 1,
+          NOW() - make_interval(days => (g % 20), hours => (g % 24)),
+          CASE
+            WHEN g % 12 = 0 THEN 'sev1'
+            WHEN g % 5 = 0 THEN 'sev2'
+            ELSE 'sev3'
+          END,
+          CASE
+            WHEN g % 7 = 0 THEN 'waiting_on_vendor'
+            WHEN g % 3 = 0 THEN 'open'
+            ELSE 'resolved'
+          END,
+          4 + ((g * 9) % 240),
+          CASE g % 4
+            WHEN 0 THEN 'finops'
+            WHEN 1 THEN 'vendor-risk'
+            WHEN 2 THEN 'fulfillment'
+            ELSE 'shared-services'
+          END
+        FROM generate_series(1, 120) AS g;
+        SQL
+    networks:
+      - demo_net
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: contextql-demo-clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - demo_net
+
+  clickhouse-seed:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: contextql-demo-clickhouse-seed
+    restart: "no"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    command:
+      - bash
+      - -lc
+      - |
+        clickhouse-client --host clickhouse --multiquery <<'SQL'
+        CREATE DATABASE IF NOT EXISTS telemetry;
+
+        CREATE TABLE IF NOT EXISTS telemetry.auth_events (
+          event_time DateTime,
+          tenant LowCardinality(String),
+          user_id UInt32,
+          vendor_id UInt32,
+          source_ip String,
+          action LowCardinality(String),
+          status LowCardinality(String),
+          latency_ms UInt32,
+          risk_score Float32
+        )
+        ENGINE = MergeTree
+        ORDER BY (tenant, event_time, user_id);
+
+        CREATE TABLE IF NOT EXISTS telemetry.fulfillment_spans (
+          captured_at DateTime,
+          order_id UInt32,
+          stage LowCardinality(String),
+          duration_ms UInt32,
+          queue_depth UInt32,
+          worker_pool LowCardinality(String),
+          breached UInt8
+        )
+        ENGINE = MergeTree
+        ORDER BY (captured_at, order_id, stage);
+
+        TRUNCATE TABLE telemetry.auth_events;
+        TRUNCATE TABLE telemetry.fulfillment_spans;
+
+        INSERT INTO telemetry.auth_events
+        SELECT
+          now() - toIntervalMinute(number % 10080) AS event_time,
+          multiIf(number % 4 = 0, 'emea', number % 4 = 1, 'na', number % 4 = 2, 'apac', 'latam') AS tenant,
+          toUInt32((number % 4000) + 1) AS user_id,
+          toUInt32((number % 60) + 1) AS vendor_id,
+          concat('10.', toString(number % 255), '.', toString((number * 7) % 255), '.', toString((number * 13) % 255)) AS source_ip,
+          arrayElement(['login', 'approve_invoice', 'download_contract', 'export_report', 'override_hold'], (number % 5) + 1) AS action,
+          if(number % 31 = 0, 'error', 'ok') AS status,
+          toUInt32(25 + ((number * 17) % 4500)) AS latency_ms,
+          if(number % 97 = 0, 0.97, round((number % 100) / 100.0, 2)) AS risk_score
+        FROM numbers(50000);
+
+        INSERT INTO telemetry.fulfillment_spans
+        SELECT
+          now() - toIntervalHour(number % 720) AS captured_at,
+          toUInt32((number % 150) + 1) AS order_id,
+          arrayElement(['approve', 'pick', 'pack', 'ship'], (number % 4) + 1) AS stage,
+          toUInt32(2000 + ((number * 29) % 900000)) AS duration_ms,
+          toUInt32(1 + (number % 80)) AS queue_depth,
+          arrayElement(['picker-a', 'picker-b', 'finops', 'carrier'], (number % 4) + 1) AS worker_pool,
+          toUInt8(if(number % 23 = 0, 1, 0)) AS breached
+        FROM numbers(12000);
+        SQL
+    networks:
+      - demo_net
+
+  minio:
+    image: minio/minio:latest
+    container_name: contextql-demo-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: contextql
+      MINIO_ROOT_PASSWORD: contextql-demo
+    command: server /data --console-address ":9001"
+    ports:
+      - "9001:9001"
+      - "9002:9000"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - demo_net
+
+  minio-seed:
+    image: minio/mc:latest
+    container_name: contextql-demo-minio-seed
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: contextql
+      MINIO_ROOT_PASSWORD: contextql-demo
+    command:
+      - sh
+      - -lc
+      - |
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing local/contracts
+        mc mb --ignore-existing local/policies
+        mc mb --ignore-existing local/audit-evidence
+
+        cat >/tmp/high-risk-vendors.json <<'EOF'
+        {
+          "generated_by": "docker-compose demo bootstrap",
+          "watchlist_vendor_ids": [13, 26, 39, 52],
+          "notes": [
+            "Repeated payment disputes in the last 90 days",
+            "Manual review required for contract overrides",
+            "Cross-reference with finance.vendors.on_watchlist"
+          ]
+        }
+        EOF
+
+        cat >/tmp/payment-policy.md <<'EOF'
+        # Payment Hold Policy
+
+        Escalate any invoice when all of the following hold:
+        - amount exceeds 15000 USD equivalent
+        - vendor is on the watchlist or risk tier is high/critical
+        - supporting audit evidence is older than 30 days
+        EOF
+
+        cat >/tmp/fulfillment-hotspots.csv <<'EOF'
+        order_id,stage,queue_signal
+        9,approve,review-cluster
+        18,pick,warehouse-b
+        27,ship,carrier-x
+        36,approve,manual-review
+        EOF
+
+        mc cp /tmp/high-risk-vendors.json local/contracts/high-risk-vendors.json
+        mc cp /tmp/payment-policy.md local/policies/payment-hold-policy.md
+        mc cp /tmp/fulfillment-hotspots.csv local/audit-evidence/fulfillment-hotspots.csv
+    networks:
+      - demo_net
+
+  adminer:
+    image: adminer:4
+    container_name: contextql-demo-adminer
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    networks:
+      - demo_net
+
+networks:
+  demo_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  clickhouse_data:
+  minio_data:

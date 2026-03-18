@@ -116,6 +116,9 @@ class ContextQLExecutor:
 
     def _collect_extra_key_cols(self, query: QueryModel) -> Dict[str, str]:
         """Return {key_col_name: select_expr} for context key columns not already projected."""
+        # SELECT * already includes all columns — nothing to inject
+        if query.projections == ["*"]:
+            return {}
         proj_text = " ".join(query.projections).lower()
         extra: Dict[str, str] = {}
         for pred in query.context_predicates:
@@ -345,7 +348,13 @@ class ContextQLExecutor:
             # Stub behavior for now: no members
             return pd.Series([False] * len(df), index=df.index)
 
-        ctx = self.adapter.get_context(ref.name)
+        try:
+            ctx = self.adapter.get_context(ref.name)
+        except KeyError:
+            raise ValueError(
+                f"Context '{ref.name}' is not registered in the adapter. "
+                "Call register_context() before executing queries that reference it."
+            )
         key_col = self._resolve_dataframe_key_column(df, pred, ctx.entity_key_name)
         values = df[key_col]
 

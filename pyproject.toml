@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "contextql"
-version = "0.1.0"
+version = "0.2.0"
 description = "A context-native query language for operational intelligence"
 readme = "README.md"
 license = "Apache-2.0"
@@ -24,12 +24,19 @@ executor = [
     "duckdb>=0.10",
     "pandas>=2.0",
 ]
+arrow = [
+    "pyarrow>=12.0",
+]
+polars = [
+    "polars>=0.19",
+]
 dev = [
     "pytest>=7.0",
 ]
 
 [project.scripts]
 contextql-lsp = "contextql.lsp.server:start"
+cql = "contextql.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
