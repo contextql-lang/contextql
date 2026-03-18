@@ -920,7 +920,7 @@ distributed execution
 # Status
 
 ```
-Total recorded decisions: 59
+Total recorded decisions: 60
 ```
 
 Future decisions should be appended to this document.
@@ -948,6 +948,24 @@ Parser uses `E001`-`E099` for syntax errors. Linter uses `E100`-`E199` for seman
 
 **Rationale:**
 The original scaffold used `CTX001`-`CTX007` for lint rules. The whitepaper defines a comprehensive error code scheme. Aligning to the whitepaper scheme ensures consistency between specification and implementation, and reserves space for future error categories (E200+ runtime, E300+ federation, E400+ lifecycle).
+
+**Version:** v1
+
+---
+
+## IM-3 — Public runtime alias: `ContextQL`
+
+**Decision:**
+`Engine` remains the implementation class name. `ContextQL` is added as a
+public alias (`ContextQL = Engine`) exported from `contextql/__init__.py`.
+`__all__` is explicitly defined for the first time.
+
+**Rationale:**
+The runtime was implemented under the name `Engine` for clarity during
+development. Aliasing as `ContextQL` aligns the primary user-facing name
+with the product brand without breaking any existing imports. An explicit
+`__all__` makes the public surface unambiguous for tooling and documentation
+generators.
 
 **Version:** v1
 

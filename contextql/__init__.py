@@ -125,30 +125,32 @@ class CatalogProxy:
 
 
 class Engine:
-    """
-    Public ContextQL engine.
+    """Primary Python runtime interface for ContextQL.
+
+    :class:`ContextQL` is provided as a public alias for brand-aligned code;
+    both names refer to the same class.
 
     Usage::
 
         import contextql as cql
 
-        engine = cql.Engine()
-        engine.register_table("invoices", df)
-        engine.register_context(
+        ctx = cql.ContextQL()
+        ctx.register_table("invoices", df, primary_key="invoice_id")
+        ctx.register_context(
             "open_invoice",
             "SELECT invoice_id FROM invoices WHERE status = 'open'",
             entity_key="invoice_id",
         )
-        result = engine.execute("SELECT * FROM invoices WHERE CONTEXT IN (open_invoice)")
+        result = ctx.execute(
+            "SELECT invoice_id, CONTEXT_SCORE() AS score "
+            "FROM invoices WHERE CONTEXT IN (open_invoice) "
+            "ORDER BY CONTEXT DESC LIMIT 10;"
+        )
         print(result.to_pandas())
 
     For a pre-loaded demo engine::
 
         engine = cql.demo()
-        result = engine.execute("SELECT invoice_id, CONTEXT_SCORE() AS s "
-                                "FROM invoices WHERE CONTEXT IN (risky_vendor) "
-                                "ORDER BY CONTEXT DESC LIMIT 10;")
-        print(result.to_pandas())
     """
 
     def __init__(self, database: str = ":memory:") -> None:
@@ -359,6 +361,10 @@ class Engine:
         return CatalogProxy(self._catalog, self._adapter)
 
 
+#: Public alias for :class:`Engine`. Preferred for brand-aligned code.
+ContextQL = Engine
+
+
 # ============================================================
 # Jupyter magic extension hook
 # ============================================================
@@ -374,8 +380,17 @@ def load_ipython_extension(ip) -> None:
 
 
 # ============================================================
-# QueryBuilder type alias (re-export for type checkers)
+# Public surface
 # ============================================================
+
+__all__ = [
+    "Engine",
+    "ContextQL",
+    "Result",
+    "CatalogProxy",
+    "demo",
+    "load_ipython_extension",
+]
 
 
 def _get_builder_class():
