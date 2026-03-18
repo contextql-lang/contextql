@@ -78,45 +78,251 @@ DECISIONS.md        Architectural decisions register (59 decisions)
 
 ## Quick Start
 
+Run these commands from the repository root:
+
 ```bash
-# Install with execution engine
-pip install -e ".[executor]"
+cd /path/to/contextql
+```
 
-# Run a context query against demo data
-python -c "
-import contextql as cql
-e = cql.demo()
-r = e.execute('SELECT invoice_id, amount FROM invoices WHERE CONTEXT IN (overdue_invoice) ORDER BY CONTEXT DESC LIMIT 5;')
-r.show()
-"
+On Ubuntu/Debian, `pip install -e ...` will usually fail outside a virtual environment because of PEP 668. The recommended setup is:
 
-# Fluent builder API
-python -c "
-import contextql as cql
-e = cql.demo()
-r = (e.query('invoices')
-      .select('invoice_id', 'amount', 'CONTEXT_SCORE() AS score')
-      .where_context('overdue_invoice')
-      .order_by_context()
-      .limit(5)
-      .execute())
-r.show()
-"
+```bash
+cd /path/to/contextql
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
 
-# Interactive REPL
+If `python3 -m venv .venv` fails, install the system venv package first:
+
+```bash
+sudo apt install python3-venv
+```
+
+After that, the quickest way to understand the project is:
+1. Install the package with the DuckDB execution engine.
+2. Run the built-in demo dataset.
+3. Try the parser or LSP separately if you are working on tooling.
+
+### Run the Built-In Demo
+
+```bash
+# From the repository root, inside the virtual environment:
+cd /path/to/contextql
+source .venv/bin/activate
+python -m pip install -e ".[executor]"
+
+# Open the interactive demo REPL
 cql demo
+```
 
-# Parse a query
-python -c "
+Inside the REPL:
+- `\d` lists the registered tables and contexts.
+- End each query with `;`.
+- `\q` exits.
+
+Example query:
+
+```sql
+SELECT invoice_id, amount, CONTEXT_SCORE() AS score
+FROM invoices
+WHERE CONTEXT IN (overdue_invoice)
+ORDER BY CONTEXT DESC
+LIMIT 5;
+```
+
+If you prefer a non-interactive Python snippet:
+
+```bash
+cd /path/to/contextql
+source .venv/bin/activate
+
+python - <<'PY'
+import contextql as cql
+engine = cql.demo()
+result = engine.execute(
+    """
+    SELECT invoice_id, amount, CONTEXT_SCORE() AS score
+    FROM invoices
+    WHERE CONTEXT IN (overdue_invoice)
+    ORDER BY CONTEXT DESC
+    LIMIT 5;
+    """
+)
+result.show()
+PY
+```
+
+### Use the Fluent Builder API
+
+```bash
+cd /path/to/contextql
+source .venv/bin/activate
+
+python - <<'PY'
+import contextql as cql
+engine = cql.demo()
+result = (
+    engine.query("invoices")
+    .select("invoice_id", "amount", "CONTEXT_SCORE() AS score")
+    .where_context("overdue_invoice")
+    .order_by_context()
+    .limit(5)
+    .execute()
+)
+result.show()
+PY
+```
+
+### Parse Without Running Queries
+
+```bash
+cd /path/to/contextql
+source .venv/bin/activate
+python -m pip install -e .
+
+python - <<'PY'
 from contextql.parser import ContextQLParser
-p = ContextQLParser()
-tree = p.parse('SELECT * FROM invoices WHERE CONTEXT IN (late_invoice);')
+parser = ContextQLParser()
+tree = parser.parse("SELECT * FROM invoices WHERE CONTEXT IN (late_invoice);")
 print(tree.pretty())
-"
+PY
+```
 
-# Install with LSP support
-pip install -e ".[lsp]"
+### Start the Language Server
+
+```bash
+cd /path/to/contextql
+source .venv/bin/activate
+python -m pip install -e ".[lsp]"
+
 contextql-lsp  # starts the language server (stdio)
+```
+
+## Demo Environment
+
+The repository also includes a multi-source demo stack at [`demo/docker-compose.yml`](demo/docker-compose.yml).
+
+This is useful when you want a more realistic walkthrough than the built-in in-memory Python demo:
+- PostgreSQL holds operational tables such as invoices, payments, orders, events, and tickets.
+- ClickHouse holds higher-volume telemetry and fulfillment-span data.
+- MinIO holds supporting documents and audit evidence.
+- Adminer provides a simple browser UI for the PostgreSQL side.
+
+Important: this Docker demo is a source-system sandbox. It seeds realistic upstream data, but it is not yet wired into the current DuckDB-backed `contextql.demo()` engine automatically.
+
+By default the stack publishes services onto a high-numbered host port block to reduce collisions with software already running on your machine:
+- PostgreSQL: `11010`
+- ClickHouse HTTP: `11011`
+- ClickHouse native client: `11012`
+- MinIO console: `11013`
+- MinIO S3 API: `11014`
+- Adminer: `11015`
+
+These ports are chosen to be unlikely to conflict, not guaranteed to be free. If you do need to override them, set one or more of these environment variables before starting the stack:
+- `CONTEXTQL_DEMO_PG_PORT`
+- `CONTEXTQL_DEMO_CLICKHOUSE_HTTP_PORT`
+- `CONTEXTQL_DEMO_CLICKHOUSE_NATIVE_PORT`
+- `CONTEXTQL_DEMO_MINIO_CONSOLE_PORT`
+- `CONTEXTQL_DEMO_MINIO_API_PORT`
+- `CONTEXTQL_DEMO_ADMINER_PORT`
+
+### Start the Docker Demo
+
+```bash
+docker compose -f demo/docker-compose.yml up -d
+
+# Optional: watch the one-shot seed containers complete
+docker compose -f demo/docker-compose.yml logs -f postgres-seed clickhouse-seed minio-seed
+
+# Check the stack state
+docker compose -f demo/docker-compose.yml ps
+```
+
+You should expect the `*-seed` containers to exit successfully after bootstrapping data. The long-running services are `postgres`, `clickhouse`, `minio`, and `adminer`.
+
+### What Gets Seeded
+
+PostgreSQL:
+- `finance.vendors`
+- `finance.invoices`
+- `finance.payments`
+- `ops.orders`
+- `ops.order_events`
+- `support.tickets`
+
+ClickHouse:
+- `telemetry.auth_events`
+- `telemetry.fulfillment_spans`
+
+MinIO buckets:
+- `contracts`
+- `policies`
+- `audit-evidence`
+
+### Connection Details
+
+PostgreSQL:
+- Host: `localhost`
+- Port: `11010`
+- Database: `contextql_demo`
+- User: `contextql`
+- Password: `contextql`
+
+ClickHouse:
+- HTTP: `http://localhost:11011`
+- Native client port: `11012`
+
+MinIO:
+- Console: `http://localhost:11013`
+- S3 API: `http://localhost:11014`
+- User: `contextql`
+- Password: `contextql-demo`
+
+Adminer:
+- URL: `http://localhost:11015`
+
+### Inspect the Seeded Data
+
+PostgreSQL examples:
+
+```bash
+psql postgresql://contextql:contextql@localhost:11010/contextql_demo -c \
+  "SELECT status, COUNT(*) FROM finance.invoices GROUP BY 1 ORDER BY 1;"
+
+psql postgresql://contextql:contextql@localhost:11010/contextql_demo -c \
+  "SELECT risk_tier, COUNT(*) FROM finance.vendors GROUP BY 1 ORDER BY 1;"
+
+psql postgresql://contextql:contextql@localhost:11010/contextql_demo -c \
+  "SELECT i.invoice_id, i.amount, v.vendor_name, v.risk_tier
+     FROM finance.invoices i
+     JOIN finance.vendors v ON v.vendor_id = i.vendor_id
+    WHERE i.status = 'open'
+    ORDER BY i.amount DESC
+    LIMIT 10;"
+```
+
+ClickHouse examples:
+
+```bash
+clickhouse-client --host localhost --port 11012 --user contextql --password contextql --query \
+  "SELECT tenant, count() FROM telemetry.auth_events GROUP BY tenant ORDER BY tenant;"
+
+clickhouse-client --host localhost --port 11012 --user contextql --password contextql --query \
+  "SELECT stage, avg(duration_ms) AS avg_duration_ms
+     FROM telemetry.fulfillment_spans
+    GROUP BY stage
+    ORDER BY avg_duration_ms DESC;"
+```
+
+### Stop or Reset the Demo
+
+```bash
+# Stop containers but keep data
+docker compose -f demo/docker-compose.yml down
+
+# Stop containers and delete seeded volumes
+docker compose -f demo/docker-compose.yml down -v
 ```
 
 ## Lint Rules
