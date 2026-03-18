@@ -109,18 +109,24 @@ This whitepaper describes the complete ContextQL architecture. The following tab
 
 ### Implemented
 
-- Language grammar — `grammar/contextql.lark` (27 statement types, full expression grammar)
+- Language grammar — `grammar/contextql.lark` (27 statement types, full expression grammar, window functions, GLOBAL(), ZSCORE())
 - Parser with error recovery — `contextql/parser.py`
 - Semantic linter with 11 rules — `contextql/linter.py`
 - Rich diagnostic renderer (Rust/Elm-style) — `contextql/diagnostics.py`
 - Error code registry — `contextql/errors.py`
 - Type system definitions — `contextql/types.py`
+- Semantic lowerer and in-memory catalog — `contextql/semantic.py`
+- Hybrid DuckDB execution engine with context filtering, scoring, and ranking — `contextql/executor.py`
+- DuckDB adapter — `contextql/adapters/duckdb_adapter.py`
+- Public Python SDK: `Engine`, `Result`, `CatalogProxy`, `demo()` — `contextql/__init__.py`
+- Fluent QueryBuilder API — `contextql/_builder.py`
+- Jupyter magic (`%%cql`, `%cql_setup`, `%cql_contexts`) — `contextql/_magic.py`
+- CLI (`cql` — REPL, file runner, explain) — `contextql/cli.py`
 - Language Server Protocol server — `contextql/lsp/server.py`
 - VS Code extension — `vscode-contextql/`
 
 ### Specified (Reference Architecture)
 
-- Retrieval execution model (Sections 15-17)
 - Physical storage model (Section 18)
 - Context Operations lifecycle (Sections 19-21)
 - Process intelligence functions (Sections 13-14)

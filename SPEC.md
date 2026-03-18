@@ -7,7 +7,7 @@ Copyright (c) 2026 Anton du Plessis (github/adpatza)
 Specification license: CC-BY-4.0
 Implementation license: Apache 2.0
 
-> **Note**: This specification describes the language as implemented in the reference toolchain (parser, linter, LSP). The grammar at `grammar/contextql.lark` is the normative source. Execution semantics are specified in the whitepaper but not yet implemented.
+> **Note**: This specification describes the ContextQL language. The grammar at `grammar/contextql.lark` is the normative source. The reference implementation (parser, linter, LSP, DuckDB execution engine, Python SDK, CLI) is fully operational. For the full design rationale and architecture, see `WHITEPAPER.md`.
 
 ---
 
@@ -184,6 +184,37 @@ CAST(expr AS type_name)
 ### General Functions
 
 Standard SQL aggregate and scalar functions are supported via the general `function(args)` syntax.
+
+### Window Functions
+
+SQL window functions are supported via the `OVER` clause:
+
+```sql
+function(args) OVER (
+  [PARTITION BY expr, ...]
+  [ORDER BY expr [ASC|DESC], ...]
+  [ROWS|RANGE|GROUPS BETWEEN frame_bound AND frame_bound]
+)
+```
+
+### GLOBAL()
+
+`GLOBAL(agg_expr)` expands to a full-dataset window aggregate. Useful for ratios and percentage-of-total calculations:
+
+```sql
+SELECT invoice_id, amount, amount / GLOBAL(SUM(amount)) AS pct_of_total
+FROM invoices;
+-- GLOBAL(SUM(amount)) → SUM(amount) OVER ()
+```
+
+### ZSCORE()
+
+`ZSCORE(expr)` computes the standard score of a column across the full dataset. Useful for outlier detection in context definitions:
+
+```sql
+SELECT invoice_id, ZSCORE(amount) AS z FROM invoices;
+-- Expands to: (amount - AVG(amount) OVER ()) / NULLIF(STDDEV_SAMP(amount) OVER (), 0.0)
+```
 
 ---
 
