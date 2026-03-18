@@ -43,12 +43,13 @@ The difference is not "can SQL express it?" but "can operational situations beco
 | Language Server (LSP) | Implemented | `contextql/lsp/server.py` |
 | VS Code extension | Implemented | `vscode-contextql/` |
 | Execution engine (DuckDB) | Implemented | `contextql/executor.py`, `contextql/__init__.py` |
-| Python Runtime SDK (`ContextQL`/`Engine`, `QueryBuilder`, `Result`) | Implemented | `contextql/__init__.py`, `contextql/builder.py` |
+| Python Runtime SDK (`ContextQL`/`Engine`, `QueryBuilder`, `Result`, provider types) | Implemented | `contextql/__init__.py`, `contextql/_builder.py`, `contextql/providers.py` |
 | CLI (`cql`) | Implemented | `contextql/cli.py` |
 | Jupyter magic (`%%cql`) | Implemented | `contextql/_magic.py` |
 | Context Ops lifecycle | Specified | See WHITEPAPER.md Sections 19-21 |
 | Process intelligence functions | Specified | See WHITEPAPER.md Sections 13-14 |
-| Federation (MCP/REMOTE) | Designed | See WHITEPAPER.md Sections 22-23 |
+| Python SDK federation runtime | Implemented | `contextql/providers.py`, `contextql/executor.py` |
+| Federation DDL (REGISTER PROVIDER, wire protocol) | Designed | See WHITEPAPER.md Sections 22-23 |
 | Security and governance | Designed | See WHITEPAPER.md Sections 24-30 |
 
 ## Repository Map
@@ -66,14 +67,14 @@ contextql/          Python package
   parser.py         Lark-based parser
   linter.py         Semantic linter (11 rules)
 grammar/            Canonical Lark grammar (contextql.lark)
-tests/              pytest suite (283 tests)
+tests/              pytest suite (319 tests)
 examples/           Runnable demos (lint_demo.py, context_showcase.py)
 vscode-contextql/   VS Code extension (LSP client)
 docs/               Tooling and LSP specifications
 agents/             Specialist agent specs and drafts
 SPEC.md             Language specification (v0.2)
 WHITEPAPER.md       Design whitepaper (43 sections)
-DECISIONS.md        Architectural decisions register (59 decisions)
+DECISIONS.md        Architectural decisions register (72 decisions)
 ```
 
 ## Quick Start
@@ -378,6 +379,7 @@ ContextQL includes a semantic linter that catches errors at authoring time:
 | E118 | error | `ORDER BY` in context definition |
 | W001 | warning | `CONTEXT WINDOW` without scored contexts |
 | W002 | warning | Joined query missing `CONTEXT ON` |
+| W003 | warning | Score expression outside [0.0, 1.0] range |
 | W004 | warning | Weight of zero |
 
 ## Resources

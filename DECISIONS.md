@@ -920,7 +920,7 @@ distributed execution
 # Status
 
 ```
-Total recorded decisions: 60
+Total recorded decisions: 78
 ```
 
 Future decisions should be appended to this document.
@@ -966,6 +966,114 @@ development. Aliasing as `ContextQL` aligns the primary user-facing name
 with the product brand without breaking any existing imports. An explicit
 `__all__` makes the public surface unambiguous for tooling and documentation
 generators.
+
+**Version:** v1
+
+---
+
+## IM-4 — Provider interfaces as a separate module with Protocol-based duck typing
+
+**Context:**
+The MCP/REMOTE runtime requires a stable contract between the Engine and external provider implementations.
+
+**Decision:**
+`contextql/providers.py` defines `MCPProvider` and `RemoteProvider` as `@runtime_checkable Protocol` classes, and `MCPResult` / `RemoteResult` as plain dataclasses. All four types are re-exported from `contextql/__init__.py` via `__all__`.
+
+**Rationale:**
+Protocol-based typing allows duck-typed implementations without inheritance, which is more natural for user-supplied adapters. A dedicated module keeps the provider contract importable independently of the engine.
+
+**Consequences:**
+Provider implementations do not need to import from contextql internals; they only need to match the method signatures.
+
+**Version:** v1
+
+---
+
+## IM-5 — ThreadPoolExecutor-based timeout for provider calls
+
+**Context:**
+MCP and REMOTE providers are external callables; they must not block the engine indefinitely.
+
+**Decision:**
+Both MCP and REMOTE provider calls use `ThreadPoolExecutor(max_workers=1)` with `future.result(timeout=ms/1000)`. Timeout thresholds are configurable via `mcp_timeout_ms` and `remote_timeout_ms` on `Engine.__init__`.
+
+**Rationale:**
+Simplest cross-platform mechanism for timeouts on synchronous callables without requiring providers to implement cooperative cancellation.
+
+**Consequences:**
+Each provider call spawns a one-shot thread. Providers that ignore cancellation will continue running in the background after timeout; their return values are discarded.
+
+**Version:** v1
+
+---
+
+## IM-6 — Per-query MCP result cache
+
+**Context:**
+A single query may evaluate the same MCP provider once for membership filtering and again for scoring. Calling the provider twice wastes a round-trip.
+
+**Decision:**
+`ContextQLExecutor._mcp_result_cache` (a plain dict) is cleared at the start of each `_execute_query`. Within one query, a given MCP provider is called at most once; subsequent accesses reuse the cached `MCPResult`.
+
+**Rationale:**
+Avoids redundant external calls while keeping cache lifetime short (per-query, not per-engine).
+
+**Consequences:**
+If a provider's result set changes between the membership check and scoring step, the cache will not reflect the change. This is acceptable for a single-query execution window.
+
+**Version:** v1
+
+---
+
+## IM-7 — REMOTE materialisation via DuckDB conn.register / conn.unregister
+
+**Context:**
+REMOTE sources must be queryable via standard DuckDB SQL within the same query execution.
+
+**Decision:**
+REMOTE results are fetched into a pandas DataFrame, registered as a temporary DuckDB view via `conn.register(temp_name, df)` before base SQL is executed, and unregistered in a `finally` block. The `TableRef` IR node is mutated in-place to `source_kind="TABLE"` and the temp name so `_build_base_sql` generates SQL transparently. Temp names use the pattern `__remote_{provider}_{resource}`.
+
+**Rationale:**
+Reuses the existing DuckDB execution path with no special-casing in SQL generation after materialisation.
+
+**Consequences:**
+REMOTE data is fully loaded into memory before query execution. Large remote datasets are the caller's responsibility to limit via the provider's `limit` parameter.
+
+**Version:** v1
+
+---
+
+## IM-8 — MCP entity key resolution strategy
+
+**Context:**
+MCP providers return entity IDs but do not declare which column they correspond to in the base DataFrame. The executor must resolve this without requiring the query author to annotate it on simple queries.
+
+**Decision:**
+`_get_mcp_entity_key(df, query)` uses a three-step fallback: (1) catalog primary key for the FROM table, (2) first matching `entity_key_name` from any registered adapter context, (3) first DataFrame column.
+
+**Rationale:**
+Covers the common case (registered table with primary key) without forcing `CONTEXT ON alias` syntax on simple single-table MCP queries.
+
+**Consequences:**
+For multi-table queries or tables without registered primary keys, the fallback may select the wrong column. Full identity-map enforcement is deferred to a future phase.
+
+**Version:** v1
+
+---
+
+## IM-9 — mcp_timeout_behavior parameter
+
+**Context:**
+A timed-out MCP provider should have configurable failure semantics: operational dashboards may prefer degraded results over errors; strict pipelines may prefer hard failures.
+
+**Decision:**
+`Engine.__init__` accepts `mcp_timeout_behavior: str = "warn"`. `"warn"` emits `warnings.warn` and returns an empty membership mask for the timed-out context; `"error"` raises `RuntimeError`. REMOTE timeouts always raise regardless of this parameter.
+
+**Rationale:**
+Implements the intent of EQ-1 (resilient degradation) with a simple string parameter.
+
+**Consequences:**
+`mcp_timeout_behavior` applies only to MCP providers. REMOTE timeout behaviour is not configurable in v1.
 
 **Version:** v1
 

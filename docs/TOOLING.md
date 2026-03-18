@@ -110,7 +110,7 @@ cql demo --file query.cql  # run a .cql file against demo data
 cql explain "SELECT ..."   # print the query plan
 ```
 
-The REPL accepts multi-line queries terminated with `;`. Use `\d` to list tables and contexts, `\q` to quit. Output formats: `table` (default), `json`, `csv` via `--format`.
+The REPL accepts multi-line queries terminated with `;`. Use `\d` to list tables and contexts, `\q` to quit. Output formats: `table` (default), `json`, `csv` via `--output` / `-o`.
 
 ### 2.6 Python SDK
 
@@ -188,6 +188,7 @@ Error codes follow the whitepaper Section 35 scheme:
 | E118    | error    | ORDER BY in context definition body |
 | W001    | warning  | CONTEXT WINDOW without scored contexts |
 | W002    | warning  | joined query missing explicit CONTEXT ON binding |
+| W003    | warning  | score expression outside [0.0, 1.0] range |
 | W004    | warning  | context weight is zero (no-op) |
 
 ---
