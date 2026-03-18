@@ -78,7 +78,28 @@ DECISIONS.md        Architectural decisions register (59 decisions)
 
 ## Quick Start
 
-The quickest way to understand the project is:
+Run these commands from the repository root:
+
+```bash
+cd /path/to/contextql
+```
+
+On Ubuntu/Debian, `pip install -e ...` will usually fail outside a virtual environment because of PEP 668. The recommended setup is:
+
+```bash
+cd /path/to/contextql
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+If `python3 -m venv .venv` fails, install the system venv package first:
+
+```bash
+sudo apt install python3-venv
+```
+
+After that, the quickest way to understand the project is:
 1. Install the package with the DuckDB execution engine.
 2. Run the built-in demo dataset.
 3. Try the parser or LSP separately if you are working on tooling.
@@ -86,8 +107,10 @@ The quickest way to understand the project is:
 ### Run the Built-In Demo
 
 ```bash
-# Install the package with the execution engine
-pip install -e ".[executor]"
+# From the repository root, inside the virtual environment:
+cd /path/to/contextql
+source .venv/bin/activate
+python -m pip install -e ".[executor]"
 
 # Open the interactive demo REPL
 cql demo
@@ -111,6 +134,9 @@ LIMIT 5;
 If you prefer a non-interactive Python snippet:
 
 ```bash
+cd /path/to/contextql
+source .venv/bin/activate
+
 python - <<'PY'
 import contextql as cql
 engine = cql.demo()
@@ -130,6 +156,9 @@ PY
 ### Use the Fluent Builder API
 
 ```bash
+cd /path/to/contextql
+source .venv/bin/activate
+
 python - <<'PY'
 import contextql as cql
 engine = cql.demo()
@@ -148,7 +177,9 @@ PY
 ### Parse Without Running Queries
 
 ```bash
-pip install -e .
+cd /path/to/contextql
+source .venv/bin/activate
+python -m pip install -e .
 
 python - <<'PY'
 from contextql.parser import ContextQLParser
@@ -161,7 +192,9 @@ PY
 ### Start the Language Server
 
 ```bash
-pip install -e ".[lsp]"
+cd /path/to/contextql
+source .venv/bin/activate
+python -m pip install -e ".[lsp]"
 
 contextql-lsp  # starts the language server (stdio)
 ```
@@ -177,6 +210,22 @@ This is useful when you want a more realistic walkthrough than the built-in in-m
 - Adminer provides a simple browser UI for the PostgreSQL side.
 
 Important: this Docker demo is a source-system sandbox. It seeds realistic upstream data, but it is not yet wired into the current DuckDB-backed `contextql.demo()` engine automatically.
+
+By default the stack publishes services onto a high-numbered host port block to reduce collisions with software already running on your machine:
+- PostgreSQL: `11010`
+- ClickHouse HTTP: `11011`
+- ClickHouse native client: `11012`
+- MinIO console: `11013`
+- MinIO S3 API: `11014`
+- Adminer: `11015`
+
+These ports are chosen to be unlikely to conflict, not guaranteed to be free. If you do need to override them, set one or more of these environment variables before starting the stack:
+- `CONTEXTQL_DEMO_PG_PORT`
+- `CONTEXTQL_DEMO_CLICKHOUSE_HTTP_PORT`
+- `CONTEXTQL_DEMO_CLICKHOUSE_NATIVE_PORT`
+- `CONTEXTQL_DEMO_MINIO_CONSOLE_PORT`
+- `CONTEXTQL_DEMO_MINIO_API_PORT`
+- `CONTEXTQL_DEMO_ADMINER_PORT`
 
 ### Start the Docker Demo
 
@@ -215,36 +264,36 @@ MinIO buckets:
 
 PostgreSQL:
 - Host: `localhost`
-- Port: `5433`
+- Port: `11010`
 - Database: `contextql_demo`
 - User: `contextql`
 - Password: `contextql`
 
 ClickHouse:
-- HTTP: `http://localhost:8123`
-- Native client port: `9000`
+- HTTP: `http://localhost:11011`
+- Native client port: `11012`
 
 MinIO:
-- Console: `http://localhost:9001`
-- S3 API: `http://localhost:9002`
+- Console: `http://localhost:11013`
+- S3 API: `http://localhost:11014`
 - User: `contextql`
 - Password: `contextql-demo`
 
 Adminer:
-- URL: `http://localhost:8080`
+- URL: `http://localhost:11015`
 
 ### Inspect the Seeded Data
 
 PostgreSQL examples:
 
 ```bash
-psql postgresql://contextql:contextql@localhost:5433/contextql_demo -c \
+psql postgresql://contextql:contextql@localhost:11010/contextql_demo -c \
   "SELECT status, COUNT(*) FROM finance.invoices GROUP BY 1 ORDER BY 1;"
 
-psql postgresql://contextql:contextql@localhost:5433/contextql_demo -c \
+psql postgresql://contextql:contextql@localhost:11010/contextql_demo -c \
   "SELECT risk_tier, COUNT(*) FROM finance.vendors GROUP BY 1 ORDER BY 1;"
 
-psql postgresql://contextql:contextql@localhost:5433/contextql_demo -c \
+psql postgresql://contextql:contextql@localhost:11010/contextql_demo -c \
   "SELECT i.invoice_id, i.amount, v.vendor_name, v.risk_tier
      FROM finance.invoices i
      JOIN finance.vendors v ON v.vendor_id = i.vendor_id
@@ -256,10 +305,10 @@ psql postgresql://contextql:contextql@localhost:5433/contextql_demo -c \
 ClickHouse examples:
 
 ```bash
-clickhouse-client --host localhost --query \
+clickhouse-client --host localhost --port 11012 --user contextql --password contextql --query \
   "SELECT tenant, count() FROM telemetry.auth_events GROUP BY tenant ORDER BY tenant;"
 
-clickhouse-client --host localhost --query \
+clickhouse-client --host localhost --port 11012 --user contextql --password contextql --query \
   "SELECT stage, avg(duration_ms) AS avg_duration_ms
      FROM telemetry.fulfillment_spans
     GROUP BY stage
