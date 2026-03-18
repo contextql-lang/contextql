@@ -119,11 +119,13 @@ This whitepaper describes the complete ContextQL architecture. The following tab
 - Hybrid DuckDB execution engine with context filtering, scoring, and ranking — `contextql/executor.py`
 - DuckDB adapter — `contextql/adapters/duckdb_adapter.py`
 - Public Python SDK: `Engine`, `Result`, `CatalogProxy`, `demo()` — `contextql/__init__.py`
+- Provider interfaces: `MCPProvider`, `MCPResult`, `RemoteProvider`, `RemoteResult` — `contextql/providers.py`
 - Fluent QueryBuilder API — `contextql/_builder.py`
 - Jupyter magic (`%%cql`, `%cql_setup`, `%cql_contexts`) — `contextql/_magic.py`
 - CLI (`cql` — REPL, file runner, explain) — `contextql/cli.py`
 - Language Server Protocol server — `contextql/lsp/server.py`
 - VS Code extension — `vscode-contextql/`
+- Federated context provider runtime — `MCPProvider`, `RemoteProvider`, `Engine.register_mcp_provider`, `Engine.register_remote_provider` — `contextql/providers.py`, `contextql/executor.py` (wire-protocol DDL and REGISTER PROVIDER syntax remain designed; see Section 22)
 
 ### Specified (Reference Architecture)
 
@@ -133,7 +135,7 @@ This whitepaper describes the complete ContextQL architecture. The following tab
 
 ### Designed (Protocol Surface)
 
-- Federated context providers — MCP and REMOTE (Section 22)
+- Federated context provider wire protocol and DDL (REGISTER PROVIDER) — MCP and REMOTE (Section 22)
 - Global Entity Namespace and identity resolution (Section 23)
 - Security, governance, and compliance (Sections 24-30)
 
