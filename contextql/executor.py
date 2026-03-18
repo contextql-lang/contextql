@@ -47,9 +47,20 @@ class ContextQLExecutor:
         self,
         catalog: InMemoryCatalog,
         adapter: DuckDBAdapter,
+        mcp_providers: Optional[Dict] = None,
+        remote_providers: Optional[Dict] = None,
+        mcp_timeout_ms: int = 30000,
+        remote_timeout_ms: int = 30000,
+        mcp_timeout_behavior: str = "warn",
     ):
         self.catalog = catalog
         self.adapter = adapter
+        self._mcp_providers: Dict = mcp_providers if mcp_providers is not None else {}
+        self._remote_providers: Dict = remote_providers if remote_providers is not None else {}
+        self._mcp_timeout_ms = mcp_timeout_ms
+        self._remote_timeout_ms = remote_timeout_ms
+        self._mcp_timeout_behavior = mcp_timeout_behavior
+        self._mcp_result_cache: Dict = {}
 
     # ---------------------------------------------------------
     # Public API
@@ -81,34 +92,115 @@ class ContextQLExecutor:
     # ---------------------------------------------------------
 
     def _execute_query(self, query: QueryModel) -> Tuple[pd.DataFrame, str]:
-        extra_key_cols = self._collect_extra_key_cols(query)
-        base_sql = self._build_base_sql(query, extra_key_cols)
-        df = self.adapter.execute_df(base_sql)
+        # Clear per-query MCP result cache
+        self._mcp_result_cache = {}
 
-        if query.context_predicates:
-            df = self._apply_context_filters(df, query)
+        # Materialise REMOTE sources before building SQL
+        temp_tables = self._materialize_remote_sources(query)
+        try:
+            extra_key_cols = self._collect_extra_key_cols(query)
+            base_sql = self._build_base_sql(query, extra_key_cols)
+            df = self.adapter.execute_df(base_sql)
 
-        if query.uses_context_score or any(item.is_context_order for item in query.order_items):
-            df = self._apply_context_scoring(df, query)
+            if query.context_predicates:
+                df = self._apply_context_filters(df, query)
 
-        # ORDER BY before renaming so __context_score is still available
-        df = self._apply_order(df, query)
+            if query.uses_context_score or any(item.is_context_order for item in query.order_items):
+                df = self._apply_context_scoring(df, query)
 
-        if query.limit is not None:
-            df = df.head(query.limit)
+            # ORDER BY before renaming so __context_score is still available
+            df = self._apply_order(df, query)
 
-        if query.offset is not None:
-            df = df.iloc[query.offset :]
+            if query.limit is not None:
+                df = df.head(query.limit)
 
-        # Drop key columns that were added for context resolution but not in user's SELECT
-        drop_cols = [c for c in extra_key_cols if c in df.columns]
-        if drop_cols:
-            df = df.drop(columns=drop_cols)
+            if query.offset is not None:
+                df = df.iloc[query.offset :]
 
-        # Rename internal score/count columns to user aliases and drop unused internals
-        df = self._apply_projection_aliases(df, query)
+            # Drop key columns that were added for context resolution but not in user's SELECT
+            drop_cols = [c for c in extra_key_cols if c in df.columns]
+            if drop_cols:
+                df = df.drop(columns=drop_cols)
 
-        return df.reset_index(drop=True), base_sql
+            # Rename internal score/count columns to user aliases and drop unused internals
+            df = self._apply_projection_aliases(df, query)
+
+            return df.reset_index(drop=True), base_sql
+        finally:
+            for t in temp_tables:
+                try:
+                    self.adapter.conn.unregister(t)
+                except Exception:
+                    pass
+
+    # ---------------------------------------------------------
+    # REMOTE source materialisation
+    # ---------------------------------------------------------
+
+    def _materialize_remote_sources(self, query: QueryModel) -> List[str]:
+        """Fetch REMOTE table refs and register them as DuckDB views.
+
+        Returns the list of registered temp names so the caller can unregister
+        them in a ``finally`` block after execution.
+        """
+        temp_names: List[str] = []
+
+        all_refs: List[TableRef] = []
+        if query.from_table is not None:
+            all_refs.append(query.from_table)
+        for j in query.joins or []:
+            all_refs.append(j.table)
+
+        for ref in all_refs:
+            if ref.source_kind != "REMOTE":
+                continue
+
+            provider_name, _, resource = ref.name.partition(".")
+            if not resource:
+                raise ValueError(
+                    f"REMOTE source '{ref.name}' must be qualified as "
+                    "provider.resource"
+                )
+
+            provider = self._remote_providers.get(provider_name)
+            if provider is None:
+                raise ValueError(
+                    f"REMOTE provider '{provider_name}' is not registered. "
+                    "Call register_remote_provider() before executing queries "
+                    "that reference it."
+                )
+
+            from concurrent.futures import ThreadPoolExecutor
+            from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(
+                    provider.query,
+                    resource=resource,
+                    filters={},
+                    columns=[],
+                    limit=None,
+                )
+                try:
+                    remote_result = future.result(
+                        timeout=self._remote_timeout_ms / 1000
+                    )
+                except FuturesTimeoutError:
+                    raise RuntimeError(
+                        f"REMOTE provider '{provider_name}' timed out after "
+                        f"{self._remote_timeout_ms}ms"
+                    )
+
+            remote_df = pd.DataFrame(remote_result.rows)
+            temp_name = f"__remote_{provider_name}_{resource.replace('.', '_')}"
+            self.adapter.conn.register(temp_name, remote_df)
+
+            # Mutate the ref in-place so _build_base_sql uses the temp name
+            ref.name = temp_name
+            ref.source_kind = "TABLE"
+            temp_names.append(temp_name)
+
+        return temp_names
 
     # ---------------------------------------------------------
     # SQL lowering
@@ -187,9 +279,6 @@ class ContextQLExecutor:
         return ", ".join(projections) if projections else "*"
 
     def _from_sql(self, table: TableRef) -> str:
-        if table.source_kind == "REMOTE":
-            raise NotImplementedError("REMOTE() is not yet supported in the DuckDB executor.")
-
         if table.alias:
             return f"{table.name} AS {table.alias}"
         return table.name
@@ -200,9 +289,6 @@ class ContextQLExecutor:
 
         chunks: List[str] = []
         for join in query.joins:
-            if join.table.source_kind == "REMOTE":
-                raise NotImplementedError("REMOTE() in JOINs is not yet supported.")
-
             table_sql = join.table.name
             if join.table.alias:
                 table_sql += f" AS {join.table.alias}"
@@ -337,6 +423,17 @@ class ContextQLExecutor:
 
         return combined
 
+    def _get_mcp_entity_key(self, df: pd.DataFrame, query: QueryModel) -> str:
+        """Return the entity key column name for MCP membership lookups."""
+        if query.from_table:
+            tbl = self.catalog.tables.get(query.from_table.name.lower())
+            if tbl and tbl.primary_key_name and tbl.primary_key_name in df.columns:
+                return tbl.primary_key_name
+        for ctx in self.adapter._contexts.values():
+            if ctx.entity_key_name in df.columns:
+                return ctx.entity_key_name
+        return df.columns[0]
+
     def _evaluate_single_context(
         self,
         df: pd.DataFrame,
@@ -345,8 +442,54 @@ class ContextQLExecutor:
         ref: ContextReference,
     ) -> pd.Series:
         if ref.source_kind == "MCP":
-            # Stub behavior for now: no members
-            return pd.Series([False] * len(df), index=df.index)
+            import warnings
+            from concurrent.futures import ThreadPoolExecutor
+            from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+            provider = self._mcp_providers.get(ref.name)
+            if provider is None:
+                raise ValueError(
+                    f"MCP provider '{ref.name}' is not registered. "
+                    "Call register_mcp_provider() before executing queries "
+                    "that reference it."
+                )
+
+            if ref.name not in self._mcp_result_cache:
+                entity_type = pred.binding_alias or (
+                    query.from_table.name if query.from_table else ""
+                )
+                params = {p.name: p.value for p in ref.parameters}
+
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    future = ex.submit(
+                        provider.resolve,
+                        entity_type=entity_type,
+                        params=params,
+                        limit=None,
+                    )
+                    try:
+                        mcp_result = future.result(
+                            timeout=self._mcp_timeout_ms / 1000
+                        )
+                    except FuturesTimeoutError:
+                        if self._mcp_timeout_behavior == "error":
+                            raise RuntimeError(
+                                f"MCP provider '{ref.name}' timed out after "
+                                f"{self._mcp_timeout_ms}ms"
+                            )
+                        warnings.warn(
+                            f"MCP provider '{ref.name}' timed out after "
+                            f"{self._mcp_timeout_ms}ms, returning empty result",
+                            stacklevel=4,
+                        )
+                        return pd.Series([False] * len(df), index=df.index)
+
+                self._mcp_result_cache[ref.name] = mcp_result
+
+            mcp_result = self._mcp_result_cache[ref.name]
+            entity_ids = set(mcp_result.entity_ids)
+            key_col = self._get_mcp_entity_key(df, query)
+            return df[key_col].isin(entity_ids)
 
         try:
             ctx = self.adapter.get_context(ref.name)
@@ -409,7 +552,13 @@ class ContextQLExecutor:
                 membership = self._evaluate_single_context(df, query, pred, ref)
 
                 if ref.source_kind == "MCP":
-                    score_values = membership.astype(float)
+                    mcp_result = self._mcp_result_cache.get(ref.name)
+                    if mcp_result is not None and mcp_result.scores is not None:
+                        score_map = dict(zip(mcp_result.entity_ids, mcp_result.scores))
+                        key_col = self._get_mcp_entity_key(df, query)
+                        score_values = df[key_col].map(score_map).fillna(0.0)
+                    else:
+                        score_values = membership.astype(float)
                 else:
                     ctx = self.adapter.get_context(ref.name)
                     key_col = self._resolve_dataframe_key_column(df, pred, ctx.entity_key_name)

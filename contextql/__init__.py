@@ -153,7 +153,13 @@ class Engine:
         engine = cql.demo()
     """
 
-    def __init__(self, database: str = ":memory:") -> None:
+    def __init__(
+        self,
+        database: str = ":memory:",
+        mcp_timeout_ms: int = 30000,
+        remote_timeout_ms: int = 30000,
+        mcp_timeout_behavior: str = "warn",
+    ) -> None:
         from contextql.adapters.duckdb_adapter import DuckDBAdapter
         from contextql.semantic import InMemoryCatalog
         from contextql.executor import ContextQLExecutor
@@ -164,7 +170,17 @@ class Engine:
 
         self._adapter = DuckDBAdapter(database=database)
         self._catalog = InMemoryCatalog()
-        self._executor = ContextQLExecutor(catalog=self._catalog, adapter=self._adapter)
+        self._mcp_providers: dict = {}
+        self._remote_providers: dict = {}
+        self._executor = ContextQLExecutor(
+            catalog=self._catalog,
+            adapter=self._adapter,
+            mcp_providers=self._mcp_providers,
+            remote_providers=self._remote_providers,
+            mcp_timeout_ms=mcp_timeout_ms,
+            remote_timeout_ms=remote_timeout_ms,
+            mcp_timeout_behavior=mcp_timeout_behavior,
+        )
 
     # ---------------------------------------------------------
     # Registration
@@ -224,6 +240,32 @@ class Engine:
         from contextql.semantic import ContextCatalogEntry
         entry = ContextCatalogEntry(name=name, entity_key_name=entity_key, has_score=has_score)
         self._catalog.contexts[name.lower()] = entry
+
+    def register_mcp_provider(self, name: str, provider) -> None:
+        """Register an MCP context provider.
+
+        After registration, queries can reference it as::
+
+            WHERE CONTEXT IN (MCP(name))
+
+        The *provider* must satisfy :class:`~contextql.providers.MCPProvider`
+        (``resolve(entity_type, params, limit)`` method returning
+        :class:`~contextql.providers.MCPResult`).
+        """
+        self._mcp_providers[name] = provider
+
+    def register_remote_provider(self, name: str, provider) -> None:
+        """Register a REMOTE data source provider.
+
+        After registration, queries can reference it as::
+
+            FROM REMOTE(name.resource)
+
+        The *provider* must satisfy :class:`~contextql.providers.RemoteProvider`
+        (``query(resource, filters, columns, limit)`` method returning
+        :class:`~contextql.providers.RemoteResult`).
+        """
+        self._remote_providers[name] = provider
 
     # ---------------------------------------------------------
     # Query
@@ -286,6 +328,29 @@ class Engine:
                 lines.append(f"Limit         : {stmt.limit}")
             if stmt.offset is not None:
                 lines.append(f"Offset        : {stmt.offset}")
+
+            # MCP / REMOTE plan nodes
+            for pred in stmt.context_predicates:
+                for ref in pred.refs:
+                    if ref.source_kind == "MCP":
+                        entity_type = pred.binding_alias or (
+                            stmt.from_table.name if stmt.from_table else ""
+                        )
+                        lines.append("ContextResolve (MCP)")
+                        lines.append(f"  provider={ref.name}")
+                        lines.append(f"  entity_type={entity_type}")
+
+            all_table_refs = []
+            if stmt.from_table is not None:
+                all_table_refs.append(stmt.from_table)
+            for j in stmt.joins:
+                all_table_refs.append(j.table)
+            for tref in all_table_refs:
+                if tref.source_kind == "REMOTE":
+                    p_name, _, resource = tref.name.partition(".")
+                    lines.append("RemoteScan")
+                    lines.append(f"  provider={p_name}")
+                    lines.append(f"  resource={resource or tref.name}")
         else:
             lines.append(f"Kind          : {stmt.kind}")
 
@@ -383,6 +448,8 @@ def load_ipython_extension(ip) -> None:
 # Public surface
 # ============================================================
 
+from contextql.providers import MCPProvider, MCPResult, RemoteProvider, RemoteResult
+
 __all__ = [
     "Engine",
     "ContextQL",
@@ -390,6 +457,10 @@ __all__ = [
     "CatalogProxy",
     "demo",
     "load_ipython_extension",
+    "MCPProvider",
+    "MCPResult",
+    "RemoteProvider",
+    "RemoteResult",
 ]
 
 
