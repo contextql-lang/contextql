@@ -10,7 +10,7 @@ services:
       POSTGRES_USER: contextql
       POSTGRES_PASSWORD: contextql
     ports:
-      - "5432:5432"
+      - "${CONTEXTQL_DEMO_PG_PORT:-11010}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -346,13 +346,18 @@ services:
     image: clickhouse/clickhouse-server:24.8
     container_name: contextql-demo-clickhouse
     restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: telemetry
+      CLICKHOUSE_USER: contextql
+      CLICKHOUSE_PASSWORD: contextql
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     ports:
-      - "8123:8123"
-      - "9000:9000"
+      - "${CONTEXTQL_DEMO_CLICKHOUSE_HTTP_PORT:-11011}:8123"
+      - "${CONTEXTQL_DEMO_CLICKHOUSE_NATIVE_PORT:-11012}:9000"
     volumes:
       - clickhouse_data:/var/lib/clickhouse
     healthcheck:
-      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
+      test: ["CMD-SHELL", "clickhouse-client --user $$CLICKHOUSE_USER --password $$CLICKHOUSE_PASSWORD --query 'SELECT 1'"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -366,11 +371,14 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+    environment:
+      CLICKHOUSE_USER: contextql
+      CLICKHOUSE_PASSWORD: contextql
     command:
       - bash
       - -lc
       - |
-        clickhouse-client --host clickhouse --multiquery <<'SQL'
+        clickhouse-client --host clickhouse --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --multiquery <<'SQL'
         CREATE DATABASE IF NOT EXISTS telemetry;
 
         CREATE TABLE IF NOT EXISTS telemetry.auth_events (
@@ -438,8 +446,8 @@ services:
       MINIO_ROOT_PASSWORD: contextql-demo
     command: server /data --console-address ":9001"
     ports:
-      - "9001:9001"
-      - "9002:9000"
+      - "${CONTEXTQL_DEMO_MINIO_CONSOLE_PORT:-11013}:9001"
+      - "${CONTEXTQL_DEMO_MINIO_API_PORT:-11014}:9000"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -457,12 +465,13 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -ec
     environment:
       MINIO_ROOT_USER: contextql
       MINIO_ROOT_PASSWORD: contextql-demo
     command:
-      - sh
-      - -lc
       - |
         mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
         mc mb --ignore-existing local/contracts
@@ -512,7 +521,7 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "${CONTEXTQL_DEMO_ADMINER_PORT:-11015}:8080"
     networks:
       - demo_net
 
