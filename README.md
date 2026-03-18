@@ -43,7 +43,7 @@ The difference is not "can SQL express it?" but "can operational situations beco
 | Language Server (LSP) | Implemented | `contextql/lsp/server.py` |
 | VS Code extension | Implemented | `vscode-contextql/` |
 | Execution engine (DuckDB) | Implemented | `contextql/executor.py`, `contextql/__init__.py` |
-| Python SDK (Engine, QueryBuilder) | Implemented | `contextql/__init__.py`, `contextql/_builder.py` |
+| Python Runtime SDK (`ContextQL`/`Engine`, `QueryBuilder`, `Result`) | Implemented | `contextql/__init__.py`, `contextql/builder.py` |
 | CLI (`cql`) | Implemented | `contextql/cli.py` |
 | Jupyter magic (`%%cql`) | Implemented | `contextql/_magic.py` |
 | Context Ops lifecycle | Specified | See WHITEPAPER.md Sections 19-21 |
@@ -172,6 +172,42 @@ result = (
 )
 result.show()
 PY
+```
+
+### Python Runtime API
+
+`ContextQL` (aliased as `Engine`) is the primary runtime class.
+
+```python
+import contextql as cql
+
+ctx = cql.ContextQL()
+
+ctx.register_table("invoices", invoices_df, primary_key="invoice_id")
+
+ctx.register_context(
+    "open_invoice",
+    "SELECT invoice_id FROM invoices WHERE status = 'open'",
+    entity_key="invoice_id",
+)
+
+result = ctx.execute("""
+    SELECT invoice_id, amount, CONTEXT_SCORE() AS score
+    FROM invoices
+    WHERE CONTEXT IN (open_invoice)
+    ORDER BY CONTEXT DESC
+    LIMIT 10;
+""")
+
+print(result.to_pandas())
+```
+
+The `@ctx.context()` decorator is an alternative to `register_context()`:
+
+```python
+@ctx.context("late_invoice", entity_key="invoice_id")
+def late_invoice():
+    return "SELECT invoice_id FROM invoices WHERE status = 'open' AND due_date < CURRENT_DATE"
 ```
 
 ### Parse Without Running Queries
