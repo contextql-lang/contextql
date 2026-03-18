@@ -172,11 +172,13 @@ class Engine:
         self._catalog = InMemoryCatalog()
         self._mcp_providers: dict = {}
         self._remote_providers: dict = {}
+        self._identity_maps: dict = {}
         self._executor = ContextQLExecutor(
             catalog=self._catalog,
             adapter=self._adapter,
             mcp_providers=self._mcp_providers,
             remote_providers=self._remote_providers,
+            identity_maps=self._identity_maps,
             mcp_timeout_ms=mcp_timeout_ms,
             remote_timeout_ms=remote_timeout_ms,
             mcp_timeout_behavior=mcp_timeout_behavior,
@@ -266,6 +268,32 @@ class Engine:
         :class:`~contextql.providers.RemoteResult`).
         """
         self._remote_providers[name] = provider
+
+    def register_identity_map(self, name: str, mapping: dict) -> None:
+        """Register a cross-entity identity mapping.
+
+        *mapping* is a dict of ``"table.column": "other_table.column"`` pairs
+        declaring that two columns identify the same logical entity.  This
+        allows context predicates whose entity key differs from the queried
+        table's primary key to be resolved automatically.
+
+        Example — invoices share a ``vendor_id`` foreign key with vendors::
+
+            engine.register_identity_map(
+                "vendor",
+                {"invoices.vendor_id": "vendors.vendor_id"}
+            )
+
+        After this registration a query such as::
+
+            SELECT invoice_id FROM invoices
+            WHERE CONTEXT IN (risky_vendor)
+
+        will use the ``vendor_id`` column from ``invoices`` to match against
+        the ``risky_vendor`` context (which is keyed on ``vendor_id`` from
+        vendors).
+        """
+        self._identity_maps[name] = mapping
 
     # ---------------------------------------------------------
     # Query
