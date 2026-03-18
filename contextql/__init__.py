@@ -21,9 +21,64 @@ class Result:
     def __init__(self, exec_result) -> None:
         self._result = exec_result
 
+    # ---------------------------------------------------------
+    # Primary output
+    # ---------------------------------------------------------
+
     def to_pandas(self) -> "pd.DataFrame":
         """Return the result as a pandas DataFrame."""
         return self._result.dataframe
+
+    def to_arrow(self):
+        """Return the result as a :class:`pyarrow.Table`.
+
+        Requires ``pip install pyarrow`` (or ``pip install 'contextql[arrow]'``).
+        """
+        try:
+            import pyarrow as pa  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "pyarrow is required for Result.to_arrow(). "
+                "Install it with: pip install pyarrow"
+            ) from None
+        return pa.Table.from_pandas(self._result.dataframe)
+
+    def to_polars(self):
+        """Return the result as a :class:`polars.DataFrame`.
+
+        Requires ``pip install polars`` (or ``pip install 'contextql[polars]'``).
+        """
+        try:
+            import polars as pl
+        except ImportError:
+            raise ImportError(
+                "polars is required for Result.to_polars(). "
+                "Install it with: pip install polars"
+            ) from None
+        return pl.from_pandas(self._result.dataframe)
+
+    def show(self, max_rows: int = 40) -> None:
+        """Print the result as a formatted table to stdout."""
+        df = self._result.dataframe
+        rows = len(df)
+        print(df.head(max_rows).to_string(index=False))
+        if rows > max_rows:
+            print(f"... ({rows - max_rows} more rows not shown)")
+        print(f"\n({rows} {'row' if rows == 1 else 'rows'})")
+
+    # ---------------------------------------------------------
+    # Metadata
+    # ---------------------------------------------------------
+
+    @property
+    def row_count(self) -> int:
+        """Number of rows in the result."""
+        return len(self._result.dataframe)
+
+    @property
+    def columns(self) -> List[str]:
+        """Column names in the result."""
+        return list(self._result.dataframe.columns)
 
     @property
     def sql(self) -> str:
@@ -235,6 +290,66 @@ class Engine:
         return "\n".join(lines)
 
     # ---------------------------------------------------------
+    # Fluent query builder
+    # ---------------------------------------------------------
+
+    def query(self, table: str) -> "QueryBuilder":
+        """Return a :class:`QueryBuilder` for *table*.
+
+        Example::
+
+            result = (engine.query("invoices")
+                .select("invoice_id", "amount", "CONTEXT_SCORE() AS score")
+                .where_context("open_invoice")
+                .order_by_context()
+                .limit(10)
+                .execute())
+        """
+        from contextql._builder import QueryBuilder
+        return QueryBuilder(self, table)
+
+    # ---------------------------------------------------------
+    # @context decorator
+    # ---------------------------------------------------------
+
+    def context(
+        self,
+        name: str,
+        *,
+        entity_key: str,
+        has_score: bool = False,
+        score_column: Optional[str] = None,
+        replace: bool = True,
+    ):
+        """Decorator that registers the decorated function as a ContextQL context.
+
+        The decorated function must accept no arguments and return a SQL string.
+
+        Example::
+
+            @engine.context("late_invoice", entity_key="invoice_id")
+            def late_invoice():
+                return "SELECT invoice_id FROM invoices WHERE status = 'open'"
+
+            @engine.context("high_value", entity_key="invoice_id",
+                             has_score=True, score_column="urgency")
+            def high_value():
+                return "SELECT invoice_id, amount / 24250.0 AS urgency FROM invoices"
+        """
+        def _decorator(fn):
+            sql = fn()
+            self.register_context(
+                name=name,
+                sql=sql,
+                entity_key=entity_key,
+                has_score=has_score,
+                score_column=score_column,
+                replace=replace,
+            )
+            return fn
+        return _decorator
+
+    # ---------------------------------------------------------
     # Catalog introspection
     # ---------------------------------------------------------
 
@@ -242,6 +357,30 @@ class Engine:
     def catalog(self) -> CatalogProxy:
         """Read-only view of registered tables and contexts."""
         return CatalogProxy(self._catalog, self._adapter)
+
+
+# ============================================================
+# Jupyter magic extension hook
+# ============================================================
+
+
+def load_ipython_extension(ip) -> None:
+    """Register ContextQL Jupyter magics.
+
+    Called automatically by ``%load_ext contextql`` in a Jupyter notebook.
+    """
+    from contextql._magic import load_ipython_extension as _load
+    _load(ip)
+
+
+# ============================================================
+# QueryBuilder type alias (re-export for type checkers)
+# ============================================================
+
+
+def _get_builder_class():
+    from contextql._builder import QueryBuilder
+    return QueryBuilder
 
 
 # ============================================================

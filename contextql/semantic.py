@@ -829,7 +829,15 @@ class SemanticLowerer:
         return False
 
     def _tree_text(self, node: Tree) -> str:
-        """Reconstruct text from a tree node by joining all tokens."""
+        """Reconstruct text from a tree node by joining all tokens.
+
+        Special-cases ``global_call`` and ``zscore_call`` to emit valid SQL
+        instead of the ContextQL keyword form.
+        """
+        if node.data == "global_call":
+            return self._expand_global_call(node)
+        if node.data == "zscore_call":
+            return self._expand_zscore_call(node)
         parts: List[str] = []
         for child in node.children:
             if isinstance(child, Token):
@@ -837,6 +845,25 @@ class SemanticLowerer:
             elif isinstance(child, Tree):
                 parts.append(self._tree_text(child))
         return " ".join(parts)
+
+    def _expand_global_call(self, node: Tree) -> str:
+        """Expand GLOBAL(agg_expr) → 'agg_expr OVER ()'."""
+        for child in node.children:
+            if isinstance(child, Tree) and child.data == "function_call":
+                inner = self._tree_text(child)
+                return f"{inner} OVER ()"
+        return "NULL"  # malformed node fallback
+
+    def _expand_zscore_call(self, node: Tree) -> str:
+        """Expand ZSCORE(expr) → standard-score window expression."""
+        for child in node.children:
+            if isinstance(child, Tree):
+                e = self._tree_text(child)
+                return (
+                    f"({e} - AVG({e}) OVER ())"
+                    f" / NULLIF(STDDEV_SAMP({e}) OVER (), 0.0)"
+                )
+        return "NULL"  # malformed node fallback
 
 
 # ============================================================

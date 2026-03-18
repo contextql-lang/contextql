@@ -116,6 +116,9 @@ class ContextQLExecutor:
 
     def _collect_extra_key_cols(self, query: QueryModel) -> Dict[str, str]:
         """Return {key_col_name: select_expr} for context key columns not already projected."""
+        # SELECT * already includes all columns — nothing to inject
+        if query.projections == ["*"]:
+            return {}
         proj_text = " ".join(query.projections).lower()
         extra: Dict[str, str] = {}
         for pred in query.context_predicates:

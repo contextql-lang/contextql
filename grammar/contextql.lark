@@ -125,6 +125,9 @@ temporal_qualifier: AT literal
 
 ?primary_expr: literal
              | column_ref
+             | window_expr
+             | global_call
+             | zscore_call
              | function_call
              | cast_expr
              | case_expr
@@ -133,6 +136,31 @@ temporal_qualifier: AT literal
              | throughput_time_between_call
              | LPAR expr RPAR
              | LPAR select_stmt RPAR
+
+// Window function (SQL standard OVER clause)
+// Placed before function_call so the parser tries the more-specific rule first.
+window_expr: function_call OVER LPAR window_spec? RPAR
+
+window_spec: partition_clause? order_by_inner? frame_clause?
+partition_clause: PARTITION BY expr (COMMA expr)*
+order_by_inner: ORDER BY order_item_inner (COMMA order_item_inner)*
+order_item_inner: expr sort_dir?
+frame_clause: (ROWS | RANGE | GROUPS) frame_extent
+frame_extent: UNBOUNDED PRECEDING
+            | int_literal PRECEDING
+            | CURRENT ROW
+            | BETWEEN frame_bound AND frame_bound
+frame_bound: UNBOUNDED PRECEDING
+           | int_literal PRECEDING
+           | CURRENT ROW
+           | int_literal FOLLOWING
+           | UNBOUNDED FOLLOWING
+
+// GLOBAL(agg_expr) — expands to agg_expr OVER () at lowering time
+global_call: GLOBAL LPAR function_call RPAR
+
+// ZSCORE(expr) — expands to (expr - AVG(expr) OVER ()) / NULLIF(STDDEV_SAMP(expr) OVER (), 0)
+zscore_call: ZSCORE LPAR expr RPAR
 
 column_ref: qualified_name
 qualified_name: identifier (DOT identifier)*
@@ -389,6 +417,18 @@ ADD: /ADD/i
 HISTOGRAM: /HISTOGRAM/i
 CLUSTER: /CLUSTER/i
 PARETO_SUM: /PARETO_SUM/i
+GLOBAL: /GLOBAL/i
+ZSCORE: /ZSCORE/i
+OVER: /OVER/i
+PARTITION: /PARTITION/i
+ROWS: /ROWS/i
+RANGE: /RANGE/i
+GROUPS: /GROUPS/i
+UNBOUNDED: /UNBOUNDED/i
+PRECEDING: /PRECEDING/i
+FOLLOWING: /FOLLOWING/i
+CURRENT: /CURRENT/i
+ROW: /ROW/i
 THROUGHPUT_TIME_BETWEEN: /THROUGHPUT_TIME_BETWEEN/i
 CONTEXT_SCORE: /CONTEXT_SCORE/i
 CONTEXT_COUNT: /CONTEXT_COUNT/i
