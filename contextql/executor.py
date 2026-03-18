@@ -49,6 +49,7 @@ class ContextQLExecutor:
         adapter: DuckDBAdapter,
         mcp_providers: Optional[Dict] = None,
         remote_providers: Optional[Dict] = None,
+        identity_maps: Optional[Dict] = None,
         mcp_timeout_ms: int = 30000,
         remote_timeout_ms: int = 30000,
         mcp_timeout_behavior: str = "warn",
@@ -57,6 +58,7 @@ class ContextQLExecutor:
         self.adapter = adapter
         self._mcp_providers: Dict = mcp_providers if mcp_providers is not None else {}
         self._remote_providers: Dict = remote_providers if remote_providers is not None else {}
+        self._identity_maps: Dict = identity_maps if identity_maps is not None else {}
         self._mcp_timeout_ms = mcp_timeout_ms
         self._remote_timeout_ms = remote_timeout_ms
         self._mcp_timeout_behavior = mcp_timeout_behavior
@@ -212,6 +214,10 @@ class ContextQLExecutor:
         if query.projections == ["*"]:
             return {}
         proj_text = " ".join(query.projections).lower()
+        # Determine what columns the FROM table actually has (for identity map lookup)
+        from_table_name = query.from_table.name.lower() if query.from_table else ""
+        from_table_df = self.adapter._tables.get(from_table_name)
+        from_cols: set = set(from_table_df.columns.str.lower()) if from_table_df is not None else set()
         extra: Dict[str, str] = {}
         for pred in query.context_predicates:
             for ref in pred.refs:
@@ -224,11 +230,36 @@ class ContextQLExecutor:
                 key_name = ctx.entity_key_name
                 if key_name.lower() in proj_text or key_name in extra:
                     continue
-                if pred.binding_alias:
-                    extra[key_name] = f"{pred.binding_alias}.{key_name}"
+                # If the context entity key exists in the FROM table, inject it directly.
+                # If not, check identity maps for a column that maps to this key.
+                # If neither exists, skip — _resolve_dataframe_key_column will raise a
+                # helpful ValueError mentioning register_identity_map.
+                if key_name.lower() in from_cols:
+                    effective_key = key_name
                 else:
-                    extra[key_name] = key_name
+                    mapped = self._find_identity_mapped_col(key_name, from_cols)
+                    if mapped is None:
+                        continue
+                    effective_key = mapped
+                if effective_key.lower() in proj_text or effective_key in extra:
+                    continue
+                if pred.binding_alias:
+                    extra[effective_key] = f"{pred.binding_alias}.{effective_key}"
+                else:
+                    extra[effective_key] = effective_key
         return extra
+
+    def _find_identity_mapped_col(self, ctx_entity_key: str, available_cols: set) -> Optional[str]:
+        """Return a column from available_cols that maps to ctx_entity_key via identity maps."""
+        for mapping in self._identity_maps.values():
+            for col_a, col_b in mapping.items():
+                _, _, a_col = col_a.rpartition(".")
+                _, _, b_col = col_b.rpartition(".")
+                if b_col == ctx_entity_key and a_col.lower() in available_cols:
+                    return a_col
+                if a_col == ctx_entity_key and b_col.lower() in available_cols:
+                    return b_col
+        return None
 
     def _build_base_sql(self, query: QueryModel, extra_key_cols: Optional[Dict[str, str]] = None) -> str:
         if not query.from_table:
@@ -512,6 +543,20 @@ class ContextQLExecutor:
         context_keys = self.adapter.resolve_context_keys(ref.name)
         return values.isin(context_keys)
 
+    def _resolve_via_identity_map(
+        self, df: pd.DataFrame, ctx_entity_key: str
+    ) -> Optional[str]:
+        """Return a DataFrame column that maps to *ctx_entity_key* via a registered identity map."""
+        for mapping in self._identity_maps.values():
+            for col_a, col_b in mapping.items():
+                _, _, a_col = col_a.rpartition(".")
+                _, _, b_col = col_b.rpartition(".")
+                if b_col == ctx_entity_key and a_col in df.columns:
+                    return a_col
+                if a_col == ctx_entity_key and b_col in df.columns:
+                    return b_col
+        return None
+
     def _resolve_dataframe_key_column(
         self,
         df: pd.DataFrame,
@@ -536,7 +581,15 @@ class ContextQLExecutor:
                 f"Use CONTEXT ON <alias> explicitly."
             )
 
-        raise ValueError(f"Could not resolve key column '{key_name}' in result DataFrame.")
+        mapped = self._resolve_via_identity_map(df, key_name)
+        if mapped:
+            return mapped
+
+        raise ValueError(
+            f"Could not resolve key column '{key_name}' in result DataFrame. "
+            "If entity keys differ across tables, register an identity map with "
+            "Engine.register_identity_map()."
+        )
 
     # ---------------------------------------------------------
     # Context scoring
