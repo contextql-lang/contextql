@@ -56,10 +56,25 @@ class RemoteResult:
 
     Attributes:
         rows: Fetched rows as a list of dicts (column → value).
-            A pandas DataFrame or Arrow Table may also be supplied in future versions.
+            A pandas DataFrame or PyArrow Table may also be supplied.
     """
 
-    rows: list[dict] | Any  # list[dict] canonical; DataFrame/Arrow accepted in future
+    rows: list[dict] | Any  # list[dict] canonical; DataFrame/Arrow also accepted
+
+    def to_dataframe(self) -> "pd.DataFrame":
+        """Coerce *rows* to a pandas DataFrame regardless of input type."""
+        import pandas as pd
+
+        if isinstance(self.rows, pd.DataFrame):
+            return self.rows
+        try:
+            import pyarrow as pa
+
+            if isinstance(self.rows, pa.Table):
+                return self.rows.to_pandas()
+        except ImportError:
+            pass
+        return pd.DataFrame(self.rows)
 
 
 @runtime_checkable
