@@ -1,0 +1,20 @@
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+COPY pyproject.toml README.md LICENSE ./
+COPY contextql/ contextql/
+COPY grammar/ grammar/
+RUN pip install --no-cache-dir --prefix=/install ".[executor]"
+
+FROM python:3.12-slim
+
+COPY --from=builder /install /usr/local
+COPY --from=builder /build/contextql /app/contextql
+COPY --from=builder /build/grammar /app/grammar
+COPY --from=builder /build/pyproject.toml /app/
+COPY demo/constrained_demo.py /app/demo.py
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python", "/app/demo.py"]

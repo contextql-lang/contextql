@@ -1,4 +1,4 @@
-"""ContextQL Killer Demo: Procurement War Room
+"""ContextQL Procurement Showcase
 
 Seven escalating scenes that showcase ContextQL's full feature set —
 from basic context queries to ML-augmented, cross-entity, federated
@@ -7,7 +7,7 @@ operational intelligence over a 240-invoice procurement dataset.
 Run from the repo root with executor extras installed:
 
     source .venv/bin/activate
-    python examples/killer_demo.py
+    python examples/procurement_showcase.py
 """
 
 from __future__ import annotations

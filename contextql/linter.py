@@ -14,17 +14,20 @@ Lint rules implemented:
   E118  ORDER BY in context definition SELECT
   W001  CONTEXT WINDOW without scores
   W002  Joined query missing explicit CONTEXT ON
+  W003  Score literal outside [0.0, 1.0] in context definition
   W004  Weight of zero (membership-only)
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from difflib import get_close_matches
 from typing import Iterable, Optional
 
 from lark import Token, Tree
 
 from .errors import Severity
 from .parser import ContextQLParser, ContextQLSyntaxError
+from .types import EntityKeyKind, EntityKeyType
 
 
 # ── Catalog data classes ────────────────────────────────────────────────
@@ -138,6 +141,7 @@ class ContextQLLinter:
         diagnostics.extend(self._rule_e118_orderby_in_context_def(tree))
         diagnostics.extend(self._rule_w001_window_without_score(tree))
         diagnostics.extend(self._rule_w002_missing_context_on_hint(tree))
+        diagnostics.extend(self._rule_w003_score_out_of_range(tree))
         diagnostics.extend(self._rule_w004_weight_zero(tree))
         return diagnostics
 
@@ -165,14 +169,24 @@ class ContextQLLinter:
     def _get_pos(self, node: Tree) -> tuple[int, int]:
         return (getattr(node.meta, "line", 1), getattr(node.meta, "column", 1))
 
+    @staticmethod
+    def _parse_entity_key_type(type_str: str, col_name: str = "") -> EntityKeyType:
+        """Convert a string type name to an EntityKeyType for compatibility checking."""
+        normalized = type_str.strip().upper()
+        kind_map = {
+            "INTEGER": EntityKeyKind.INTEGER, "INT": EntityKeyKind.INTEGER,
+            "BIGINT": EntityKeyKind.BIGINT,
+            "VARCHAR": EntityKeyKind.VARCHAR, "TEXT": EntityKeyKind.VARCHAR, "STRING": EntityKeyKind.VARCHAR,
+            "UUID": EntityKeyKind.UUID,
+        }
+        kind = kind_map.get(normalized, EntityKeyKind.COMPOSITE)
+        return EntityKeyType(kind=kind, column_name=col_name)
+
     def _did_you_mean(self, name: str) -> Optional[str]:
-        """Simple fuzzy match: suggest catalog contexts with shared prefix."""
+        """Fuzzy match using sequence similarity (difflib)."""
         candidates = self.catalog.context_names()
-        name_lower = name.lower()
-        for c in candidates:
-            if c.startswith(name_lower[:3]) or name_lower.startswith(c[:3]):
-                return c
-        return None
+        matches = get_close_matches(name.lower(), candidates, n=1, cutoff=0.6)
+        return matches[0] if matches else None
 
     # ── E100: Undefined context ─────────────────────────────────────────
 
@@ -252,20 +266,25 @@ class ContextQLLinter:
                 if isinstance(first, Tree) and first.data == "qualified_name":
                     cname = self._qualified_name_text(first)
                     ctx = self.catalog.get_context(cname)
-                    if ctx and ctx.entity_key_type.upper() != binding_table.primary_key_type.upper():
-                        line, col = self._get_pos(inv)
-                        out.append(LintDiagnostic(
-                            rule_id="E102",
-                            severity="error",
-                            message=(
-                                f"Entity key type mismatch: context '{cname}' "
-                                f"has key '{ctx.entity_key}' ({ctx.entity_key_type}) "
-                                f"but table '{binding_table.name}' has key "
-                                f"'{binding_table.primary_key}' ({binding_table.primary_key_type})."
-                            ),
-                            line=line, column=col,
-                            suggestion="Use CONTEXT ON to bind to the correct table.",
-                        ))
+                    if ctx:
+                        ctx_key = self._parse_entity_key_type(
+                            ctx.entity_key_type, ctx.entity_key)
+                        tbl_key = self._parse_entity_key_type(
+                            binding_table.primary_key_type, binding_table.primary_key or "")
+                        if not ctx_key.is_compatible_with(tbl_key):
+                            line, col = self._get_pos(inv)
+                            out.append(LintDiagnostic(
+                                rule_id="E102",
+                                severity="error",
+                                message=(
+                                    f"Entity key type mismatch: context '{cname}' "
+                                    f"has key '{ctx.entity_key}' ({ctx.entity_key_type}) "
+                                    f"but table '{binding_table.name}' has key "
+                                    f"'{binding_table.primary_key}' ({binding_table.primary_key_type})."
+                                ),
+                                line=line, column=col,
+                                suggestion="Use CONTEXT ON to bind to the correct table.",
+                            ))
         return out
 
     # ── E103: Circular dependency ───────────────────────────────────────
@@ -451,6 +470,30 @@ class ContextQLLinter:
                     suggestion="Use CONTEXT ON table_alias IN (...) for clarity in multi-table queries.",
                 )]
         return []
+
+    # ── W003: Score literal out of range ────────────────────────────────
+
+    def _rule_w003_score_out_of_range(self, tree: Tree) -> list[LintDiagnostic]:
+        out: list[LintDiagnostic] = []
+        for stmt in self._iter_subtrees(tree, "create_context_stmt"):
+            for sc in self._iter_subtrees(stmt, "score_clause"):
+                # Look for numeric literals in the score expression
+                for tok in sc.scan_values(lambda v: isinstance(v, Token)):
+                    if tok.type in {"NUMBER", "SIGNED_NUMBER", "FLOAT", "INT"}:
+                        try:
+                            val = float(tok.value)
+                        except ValueError:
+                            continue
+                        if val < 0.0 or val > 1.0:
+                            line, col = self._get_pos(sc)
+                            out.append(LintDiagnostic(
+                                rule_id="W003",
+                                severity="warning",
+                                message=f"Score literal {tok.value} is outside the expected [0.0, 1.0] range.",
+                                line=line, column=col,
+                                suggestion="Context scores are typically normalized to [0.0, 1.0].",
+                            ))
+        return out
 
     # ── W004: Weight of zero ────────────────────────────────────────────
 

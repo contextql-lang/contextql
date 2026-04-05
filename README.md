@@ -39,7 +39,7 @@ The difference is not "can SQL express it?" but "can operational situations beco
 | Semantic linter (11 rules) | Implemented | `contextql/linter.py` |
 | Rich diagnostics | Implemented | `contextql/diagnostics.py` |
 | Error code registry | Implemented | `contextql/errors.py` |
-| Type system definitions | Implemented | `contextql/types.py` |
+| Type system definitions | Defined (not yet integrated) | `contextql/types.py` |
 | Language Server (LSP) | Implemented | `contextql/lsp/server.py` |
 | VS Code extension | Implemented | `vscode-contextql/` |
 | Execution engine (DuckDB) | Implemented | `contextql/executor.py`, `contextql/__init__.py` |
@@ -68,8 +68,8 @@ contextql/          Python package
   parser.py         Lark-based parser
   linter.py         Semantic linter (11 rules)
 grammar/            Canonical Lark grammar (contextql.lark)
-tests/              pytest suite (359 tests)
-examples/           Runnable demos (killer_demo, federation_demo, context_showcase, lint_demo)
+tests/              pytest suite (361 tests)
+examples/           Runnable demos (procurement_showcase, federation_demo, context_showcase, lint_demo)
 vscode-contextql/   VS Code extension (LSP client)
 docs/               Tooling and LSP specifications
 agents/             Specialist agent specs and drafts
@@ -155,14 +155,14 @@ result.show()
 PY
 ```
 
-### Run the Killer Demo
+### Run the Procurement Showcase
 
-The killer demo walks through 7 escalating scenes of operational intelligence — from basic context queries to ML-augmented, cross-entity, federated analysis over the 240-invoice procurement dataset.
+The procurement showcase walks through 7 escalating scenes of operational intelligence — from basic context queries to ML-augmented, cross-entity, federated analysis over the 240-invoice procurement dataset.
 
 ```bash
 source .venv/bin/activate
 python -m pip install -e ".[executor]"
-python examples/killer_demo.py
+python examples/procurement_showcase.py
 ```
 
 Scenes covered:

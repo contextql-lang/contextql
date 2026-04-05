@@ -872,6 +872,10 @@ class SemanticLowerer:
 
 
 class SemanticAnalyzer:
+    # TODO(v0.3): Only 5 semantic checks (E120, E130-133, E140-141).
+    # Needs type checking per Whitepaper Section 5, scope validation,
+    # and cross-statement consistency analysis.
+
     def __init__(self, catalog: Optional[CatalogProtocol] = None) -> None:
         self.catalog = catalog or InMemoryCatalog()
 

@@ -280,7 +280,11 @@ class ContextQLExecutor:
         return extra
 
     def _find_identity_mapped_col(self, ctx_entity_key: str, available_cols: set) -> Optional[str]:
-        """Return a column from available_cols that maps to ctx_entity_key via identity maps."""
+        """Return a column from available_cols that maps to ctx_entity_key via identity maps.
+
+        # TODO(v0.3): Identity maps use string matching only — no type
+        # coercion or schema validation (Whitepaper Section 23).
+        """
         for mapping in self._identity_maps.values():
             for col_a, col_b in mapping.items():
                 _, _, a_col = col_a.rpartition(".")
@@ -373,8 +377,11 @@ class ContextQLExecutor:
         if not where_text.strip():
             return ""
 
+        import re
+        _context_pred_re = re.compile(
+            r'\bCONTEXT\s+(?:ON\s+\w+\s+)?(?:NOT\s+)?IN\b', re.IGNORECASE)
         parts = self._split_top_level_and(where_text)
-        kept = [p for p in parts if "CONTEXT" not in p.upper()]
+        kept = [p for p in parts if not _context_pred_re.search(p)]
         return " AND ".join(kept).strip()
 
     def _split_top_level_and(self, text: str) -> List[str]:
@@ -666,6 +673,10 @@ class ContextQLExecutor:
     # ---------------------------------------------------------
 
     def _apply_context_scoring(self, df: pd.DataFrame, query: QueryModel) -> pd.DataFrame:
+        # TODO(v0.3): Only MAX/MIN scoring strategies implemented.
+        # Whitepaper Section 9.2 specifies AVG, SUM, COUNT, WEIGHTED_SUM.
+        # THEN chain scoping (Section 6.6) not enforced — c2 should
+        # evaluate only over c1 members.
         if df.empty:
             df = df.copy()
             df["__context_score"] = []

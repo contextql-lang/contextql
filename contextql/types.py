@@ -1,5 +1,9 @@
 """ContextQL type system.
 
+# TODO(v0.3): Integrate this module into semantic.py and linter.py for
+# runtime type checking. Currently defines the lattice but is only used
+# by linter.py for EntityKeyType compatibility (E102).
+
 Implements the type lattice from WHITEPAPER Section 5:
 
                     ANY
