@@ -198,6 +198,22 @@ def hover(params: types.HoverParams) -> types.Hover | None:
             word = "CONTEXT_WINDOW"
 
     content = _HOVER_DOCS.get(word)
+
+    # Check catalog for context name hover (case-insensitive)
+    if content is None:
+        original_word = line[word_start:word_end]
+        ctx = _catalog.get_context(original_word)
+        if ctx:
+            parts = [f"**Context: `{ctx.name}`**"]
+            parts.append(f"- Entity key: `{ctx.entity_key}` ({ctx.entity_key_type})")
+            if ctx.has_score:
+                parts.append("- Scored: yes")
+            if ctx.is_temporal:
+                parts.append("- Temporal: yes")
+            if ctx.parameters:
+                parts.append(f"- Parameters: {', '.join(ctx.parameters)}")
+            content = "\n".join(parts)
+
     if content is None:
         return None
 

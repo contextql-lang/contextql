@@ -151,7 +151,29 @@ class TestCrossEntityResolution:
 
 class TestIdentityMapWithMCP:
     def test_mcp_on_renamed_fk_resolves_via_map(self, renamed_engine):
-        """MCP provider returning vendor IDs resolves against invoices.supplier_id."""
+        """MCP provider with entity_key resolves vendor IDs via identity map."""
+
+        class RiskyVendorMCP:
+            def resolve(self, entity_type, params, limit=None):
+                return MCPResult(entity_type=entity_type, entity_ids=[10])
+
+        renamed_engine.register_mcp_provider(
+            "risky_v", RiskyVendorMCP(), entity_key="vendor_id"
+        )
+        renamed_engine.register_identity_map(
+            "vendor",
+            {"invoices.supplier_id": "vendors.vendor_id"},
+        )
+        result = renamed_engine.execute(
+            "SELECT invoice_id FROM invoices WHERE CONTEXT IN (MCP(risky_v));"
+        )
+        # entity_key="vendor_id" → identity map → supplier_id column
+        # vendor_id 10 → supplier_id 10 → invoices 1, 3
+        ids = sorted(result.to_pandas()["invoice_id"].tolist())
+        assert ids == [1, 3]
+
+    def test_mcp_without_entity_key_uses_catalog_pk(self, renamed_engine):
+        """Without entity_key, MCP falls back to catalog PK (invoice_id)."""
 
         class RiskyVendorMCP:
             def resolve(self, entity_type, params, limit=None):
@@ -165,12 +187,82 @@ class TestIdentityMapWithMCP:
         result = renamed_engine.execute(
             "SELECT invoice_id FROM invoices WHERE CONTEXT IN (MCP(risky_v));"
         )
-        # vendor_id 10 → supplier_id 10 → invoices 1, 3
-        # MCP returns [10] as entity IDs; _get_mcp_entity_key uses catalog PK
-        # (invoice_id) by default. MCP provider must return invoice IDs for
-        # this to match correctly — identity map only helps _resolve_dataframe_key_column.
-        # The MCP case uses _get_mcp_entity_key which reads the catalog PK.
-        # So this test verifies MCP uses invoice_id directly, not identity map path.
+        # No entity_key → uses catalog PK (invoice_id).
+        # entity_id 10 is not in invoice_id [1,2,3] → 0 rows.
+        assert result.row_count == 0
+
+    def test_mcp_with_direct_pk_match_still_works(self, renamed_engine):
+        """MCP returning actual PKs works without entity_key or identity map."""
+
+        class InvoiceMCP:
+            def resolve(self, entity_type, params, limit=None):
+                return MCPResult(entity_type=entity_type, entity_ids=[1, 3])
+
+        renamed_engine.register_mcp_provider("inv_mcp", InvoiceMCP())
+        result = renamed_engine.execute(
+            "SELECT invoice_id FROM invoices WHERE CONTEXT IN (MCP(inv_mcp));"
+        )
         ids = sorted(result.to_pandas()["invoice_id"].tolist())
-        # MCP returned entity_id=10 → NOT in invoice_id list [1,2,3] → 0 rows
-        assert result.row_count == 0  # correct: MCP entity IDs must be invoice IDs
+        assert ids == [1, 3]
+
+    def test_mcp_scoring_with_identity_map(self, renamed_engine):
+        """MCP scoring uses identity-mapped column for score lookups."""
+
+        class ScoredVendorMCP:
+            def resolve(self, entity_type, params, limit=None):
+                return MCPResult(
+                    entity_type=entity_type,
+                    entity_ids=[10, 20],
+                    scores=[0.9, 0.3],
+                )
+
+        renamed_engine.register_mcp_provider(
+            "scored_v", ScoredVendorMCP(), entity_key="vendor_id"
+        )
+        renamed_engine.register_identity_map(
+            "vendor",
+            {"invoices.supplier_id": "vendors.vendor_id"},
+        )
+        result = renamed_engine.execute(
+            "SELECT invoice_id, CONTEXT_SCORE() AS s FROM invoices "
+            "WHERE CONTEXT IN (MCP(scored_v)) ORDER BY CONTEXT DESC;"
+        )
+        df = result.to_pandas()
+        # supplier_id 10 → invoices 1, 3 (score 0.9)
+        # supplier_id 20 → invoice 2 (score 0.3)
+        assert len(df) == 3
+        assert df.iloc[0]["s"] == pytest.approx(0.9)
+
+
+class TestMCPEntityKeyNoSilentFallback:
+    """Verify that MCP never silently falls back to df.columns[0]."""
+
+    def test_no_pk_no_context_raises(self):
+        """Without catalog PK or registered contexts, MCP raises ValueError."""
+        e = cql.Engine()
+        df = pd.DataFrame({"col_a": [1, 2, 3], "col_b": [10, 20, 30]})
+        e.register_table("data", df)  # no primary_key
+
+        class SimpleMCP:
+            def resolve(self, entity_type, params, limit=None):
+                return MCPResult(entity_type=entity_type, entity_ids=[1])
+
+        e.register_mcp_provider("test_mcp", SimpleMCP())
+        with pytest.raises(ValueError, match="Cannot determine entity key column"):
+            e.execute(
+                "SELECT col_a FROM data WHERE CONTEXT IN (MCP(test_mcp));"
+            )
+
+    def test_error_message_mentions_identity_map(self):
+        """The error message guides the user to register_identity_map."""
+        e = cql.Engine()
+        df = pd.DataFrame({"x": [1], "y": [2]})
+        e.register_table("t", df)
+
+        class SimpleMCP:
+            def resolve(self, entity_type, params, limit=None):
+                return MCPResult(entity_type=entity_type, entity_ids=[1])
+
+        e.register_mcp_provider("m", SimpleMCP())
+        with pytest.raises(ValueError, match="register_identity_map"):
+            e.execute("SELECT x FROM t WHERE CONTEXT IN (MCP(m));")

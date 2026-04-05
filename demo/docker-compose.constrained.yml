@@ -1,0 +1,15 @@
+services:
+  cql-constrained-demo:
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile.constrained
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+        reservations:
+          cpus: "0.25"
+          memory: 64M
+    environment:
+      PYTHONUNBUFFERED: "1"

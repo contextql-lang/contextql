@@ -48,6 +48,7 @@ class ContextQLExecutor:
         catalog: InMemoryCatalog,
         adapter: DuckDBAdapter,
         mcp_providers: Optional[Dict] = None,
+        mcp_entity_keys: Optional[Dict[str, str]] = None,
         remote_providers: Optional[Dict] = None,
         identity_maps: Optional[Dict] = None,
         mcp_timeout_ms: int = 30000,
@@ -57,6 +58,7 @@ class ContextQLExecutor:
         self.catalog = catalog
         self.adapter = adapter
         self._mcp_providers: Dict = mcp_providers if mcp_providers is not None else {}
+        self._mcp_entity_keys: Dict[str, str] = mcp_entity_keys if mcp_entity_keys is not None else {}
         self._remote_providers: Dict = remote_providers if remote_providers is not None else {}
         self._identity_maps: Dict = identity_maps if identity_maps is not None else {}
         self._mcp_timeout_ms = mcp_timeout_ms
@@ -193,7 +195,7 @@ class ContextQLExecutor:
                         f"{self._remote_timeout_ms}ms"
                     )
 
-            remote_df = pd.DataFrame(remote_result.rows)
+            remote_df = remote_result.to_dataframe()
             temp_name = f"__remote_{provider_name}_{resource.replace('.', '_')}"
             self.adapter.conn.register(temp_name, remote_df)
 
@@ -222,6 +224,34 @@ class ContextQLExecutor:
         for pred in query.context_predicates:
             for ref in pred.refs:
                 if ref.source_kind == "MCP":
+                    # MCP key resolution uses the registered entity_key first,
+                    # then the catalog PK, then identity maps.  Inject the
+                    # resolved column if not already projected.
+                    registered_key = self._mcp_entity_keys.get(ref.name)
+                    if registered_key is not None:
+                        key_name = registered_key
+                    else:
+                        if not query.from_table:
+                            continue
+                        tbl = self.catalog.tables.get(query.from_table.name.lower())
+                        if not tbl or not tbl.primary_key_name:
+                            continue
+                        key_name = tbl.primary_key_name
+                    if key_name.lower() in proj_text or key_name in extra:
+                        continue
+                    if key_name.lower() in from_cols:
+                        effective_key = key_name
+                    else:
+                        mapped = self._find_identity_mapped_col(key_name, from_cols)
+                        if mapped is None:
+                            continue
+                        effective_key = mapped
+                    if effective_key.lower() in proj_text or effective_key in extra:
+                        continue
+                    if pred.binding_alias:
+                        extra[effective_key] = f"{pred.binding_alias}.{effective_key}"
+                    else:
+                        extra[effective_key] = effective_key
                     continue
                 try:
                     ctx = self.adapter.get_context(ref.name)
@@ -250,7 +280,11 @@ class ContextQLExecutor:
         return extra
 
     def _find_identity_mapped_col(self, ctx_entity_key: str, available_cols: set) -> Optional[str]:
-        """Return a column from available_cols that maps to ctx_entity_key via identity maps."""
+        """Return a column from available_cols that maps to ctx_entity_key via identity maps.
+
+        # TODO(v0.3): Identity maps use string matching only — no type
+        # coercion or schema validation (Whitepaper Section 23).
+        """
         for mapping in self._identity_maps.values():
             for col_a, col_b in mapping.items():
                 _, _, a_col = col_a.rpartition(".")
@@ -343,8 +377,11 @@ class ContextQLExecutor:
         if not where_text.strip():
             return ""
 
+        import re
+        _context_pred_re = re.compile(
+            r'\bCONTEXT\s+(?:ON\s+\w+\s+)?(?:NOT\s+)?IN\b', re.IGNORECASE)
         parts = self._split_top_level_and(where_text)
-        kept = [p for p in parts if "CONTEXT" not in p.upper()]
+        kept = [p for p in parts if not _context_pred_re.search(p)]
         return " AND ".join(kept).strip()
 
     def _split_top_level_and(self, text: str) -> List[str]:
@@ -454,16 +491,56 @@ class ContextQLExecutor:
 
         return combined
 
-    def _get_mcp_entity_key(self, df: pd.DataFrame, query: QueryModel) -> str:
-        """Return the entity key column name for MCP membership lookups."""
+    def _resolve_mcp_key_column(
+        self,
+        df: pd.DataFrame,
+        query: QueryModel,
+        pred: ContextPredicate,
+        ref_name: str,
+    ) -> str:
+        """Return the DataFrame column for MCP entity-key matching.
+
+        Resolution strategy:
+        1. Registered ``entity_key`` for this provider (set via
+           ``register_mcp_provider(..., entity_key=)``), resolved through
+           ``_resolve_dataframe_key_column`` (which handles identity maps).
+        2. Catalog primary key for the FROM table, resolved through the same
+           chain.
+        3. First adapter-registered context entity key found in the DataFrame.
+        4. Fails with a helpful ``ValueError`` — never falls back to an
+           arbitrary column.
+        """
+        # 1. Registered entity key for this specific provider
+        registered_key = self._mcp_entity_keys.get(ref_name)
+        if registered_key is not None:
+            return self._resolve_dataframe_key_column(df, pred, registered_key)
+
+        # 2. Catalog primary key
+        key_name: Optional[str] = None
         if query.from_table:
             tbl = self.catalog.tables.get(query.from_table.name.lower())
-            if tbl and tbl.primary_key_name and tbl.primary_key_name in df.columns:
-                return tbl.primary_key_name
+            if tbl and tbl.primary_key_name:
+                key_name = tbl.primary_key_name
+
+        if key_name is not None:
+            try:
+                return self._resolve_dataframe_key_column(df, pred, key_name)
+            except ValueError:
+                pass  # fall through to adapter context scan
+
+        # 3. Adapter-registered context entity keys
         for ctx in self.adapter._contexts.values():
             if ctx.entity_key_name in df.columns:
                 return ctx.entity_key_name
-        return df.columns[0]
+
+        # 4. Fail fast with guidance
+        from_name = query.from_table.name if query.from_table else "<unknown>"
+        raise ValueError(
+            f"Cannot determine entity key column for MCP context on table "
+            f"'{from_name}'. Register the table with a primary_key, pass "
+            f"entity_key= to register_mcp_provider(), or register an "
+            f"identity map with Engine.register_identity_map()."
+        )
 
     def _evaluate_single_context(
         self,
@@ -527,7 +604,7 @@ class ContextQLExecutor:
 
             mcp_result = self._mcp_result_cache[cache_key]
             entity_ids = set(mcp_result.entity_ids)
-            key_col = self._get_mcp_entity_key(df, query)
+            key_col = self._resolve_mcp_key_column(df, query, pred, ref.name)
             return df[key_col].isin(entity_ids)
 
         try:
@@ -596,6 +673,10 @@ class ContextQLExecutor:
     # ---------------------------------------------------------
 
     def _apply_context_scoring(self, df: pd.DataFrame, query: QueryModel) -> pd.DataFrame:
+        # TODO(v0.3): Only MAX/MIN scoring strategies implemented.
+        # Whitepaper Section 9.2 specifies AVG, SUM, COUNT, WEIGHTED_SUM.
+        # THEN chain scoping (Section 6.6) not enforced — c2 should
+        # evaluate only over c1 members.
         if df.empty:
             df = df.copy()
             df["__context_score"] = []
@@ -621,7 +702,7 @@ class ContextQLExecutor:
                     mcp_result = self._mcp_result_cache.get(_ck)
                     if mcp_result is not None and mcp_result.scores is not None:
                         score_map = dict(zip(mcp_result.entity_ids, mcp_result.scores))
-                        key_col = self._get_mcp_entity_key(df, query)
+                        key_col = self._resolve_mcp_key_column(df, query, pred, ref.name)
                         score_values = df[key_col].map(score_map).fillna(0.0)
                     else:
                         score_values = membership.astype(float)

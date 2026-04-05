@@ -171,12 +171,14 @@ class Engine:
         self._adapter = DuckDBAdapter(database=database)
         self._catalog = InMemoryCatalog()
         self._mcp_providers: dict = {}
+        self._mcp_entity_keys: dict = {}
         self._remote_providers: dict = {}
         self._identity_maps: dict = {}
         self._executor = ContextQLExecutor(
             catalog=self._catalog,
             adapter=self._adapter,
             mcp_providers=self._mcp_providers,
+            mcp_entity_keys=self._mcp_entity_keys,
             remote_providers=self._remote_providers,
             identity_maps=self._identity_maps,
             mcp_timeout_ms=mcp_timeout_ms,
@@ -243,7 +245,9 @@ class Engine:
         entry = ContextCatalogEntry(name=name, entity_key_name=entity_key, has_score=has_score)
         self._catalog.contexts[name.lower()] = entry
 
-    def register_mcp_provider(self, name: str, provider) -> None:
+    def register_mcp_provider(
+        self, name: str, provider, *, entity_key: Optional[str] = None
+    ) -> None:
         """Register an MCP context provider.
 
         After registration, queries can reference it as::
@@ -253,8 +257,19 @@ class Engine:
         The *provider* must satisfy :class:`~contextql.providers.MCPProvider`
         (``resolve(entity_type, params, limit)`` method returning
         :class:`~contextql.providers.MCPResult`).
+
+        Args:
+            name: Provider name used in ``MCP(name)`` references.
+            provider: Object implementing the MCPProvider protocol.
+            entity_key: Optional column name that the provider's entity IDs
+                correspond to.  When set, the executor uses this (plus any
+                registered identity maps) to resolve the correct DataFrame
+                column for membership and scoring lookups.  Without this,
+                the executor defaults to the FROM table's catalog primary key.
         """
         self._mcp_providers[name] = provider
+        if entity_key is not None:
+            self._mcp_entity_keys[name] = entity_key
 
     def register_remote_provider(self, name: str, provider) -> None:
         """Register a REMOTE data source provider.
@@ -476,7 +491,15 @@ def load_ipython_extension(ip) -> None:
 # Public surface
 # ============================================================
 
-from contextql.providers import MCPProvider, MCPResult, RemoteProvider, RemoteResult
+from contextql.providers import (
+    MCPProvider,
+    MCPResult,
+    RemoteProvider,
+    RemoteResult,
+    FraudDetectionMCP,
+    PriorityMCP,
+    JiraRemoteProvider,
+)
 
 __all__ = [
     "Engine",
@@ -489,6 +512,9 @@ __all__ = [
     "MCPResult",
     "RemoteProvider",
     "RemoteResult",
+    "FraudDetectionMCP",
+    "PriorityMCP",
+    "JiraRemoteProvider",
 ]
 
 

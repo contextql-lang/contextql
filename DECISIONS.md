@@ -1079,4 +1079,28 @@ Implements the intent of EQ-1 (resilient degradation) with a simple string param
 
 ---
 
+## IM-10 — MCP entity key resolution hardening
+
+**Context:**
+IM-8 deferred identity-map integration for MCP entity key resolution. `_get_mcp_entity_key` had a dangerous `df.columns[0]` silent fallback that could produce wrong results when no catalog PK or adapter context key matched. MCP providers also could not participate in identity-map resolution.
+
+**Decision:**
+Replace `_get_mcp_entity_key` with `_resolve_mcp_key_column` that:
+1. Checks a new optional `entity_key` parameter on `register_mcp_provider()` — when set, resolves through `_resolve_dataframe_key_column` (which supports identity maps).
+2. Falls back to catalog PK resolved through the same chain.
+3. Falls back to adapter-registered context entity keys.
+4. Raises `ValueError` with actionable guidance — never falls back to an arbitrary column.
+
+`_collect_extra_key_cols` also handles MCP refs now, injecting identity-mapped columns into the base SQL when needed.
+
+**Rationale:**
+Fail-fast is safer than silent wrong results. The `entity_key` parameter keeps the API explicit ("if entity keys differ, say so") while maintaining full backward compatibility (omitting it preserves IM-8 behavior).
+
+**Consequences:**
+Queries that relied on the `df.columns[0]` fallback (producing silently wrong results) now raise errors. Users must register tables with `primary_key=`, pass `entity_key=` to `register_mcp_provider()`, or use `register_identity_map()`.
+
+**Version:** v1
+
+---
+
 # End of DECISIONS.md

@@ -39,16 +39,16 @@ The difference is not "can SQL express it?" but "can operational situations beco
 | Semantic linter (11 rules) | Implemented | `contextql/linter.py` |
 | Rich diagnostics | Implemented | `contextql/diagnostics.py` |
 | Error code registry | Implemented | `contextql/errors.py` |
-| Type system definitions | Implemented | `contextql/types.py` |
+| Type system definitions | Defined (not yet integrated) | `contextql/types.py` |
 | Language Server (LSP) | Implemented | `contextql/lsp/server.py` |
 | VS Code extension | Implemented | `vscode-contextql/` |
 | Execution engine (DuckDB) | Implemented | `contextql/executor.py`, `contextql/__init__.py` |
-| Python Runtime SDK (`ContextQL`/`Engine`, `QueryBuilder`, `Result`, provider types) | Implemented | `contextql/__init__.py`, `contextql/_builder.py`, `contextql/providers.py` |
+| Python Runtime SDK (`ContextQL`/`Engine`, `QueryBuilder`, `Result`, provider types) | Implemented | `contextql/__init__.py`, `contextql/_builder.py`, `contextql/providers/` |
 | CLI (`cql`) | Implemented | `contextql/cli.py` |
 | Jupyter magic (`%%cql`) | Implemented | `contextql/_magic.py` |
 | Context Ops lifecycle | Specified | See WHITEPAPER.md Sections 19-21 |
 | Process intelligence functions | Specified | See WHITEPAPER.md Sections 13-14 |
-| Python SDK federation runtime | Implemented | `contextql/providers.py`, `contextql/executor.py` |
+| Python SDK federation runtime | Implemented | `contextql/providers/`, `contextql/executor.py` |
 | Federation DDL (REGISTER PROVIDER, wire protocol) | Designed | See WHITEPAPER.md Sections 22-23 |
 | Security and governance | Designed | See WHITEPAPER.md Sections 24-30 |
 
@@ -59,6 +59,7 @@ contextql/          Python package
   __init__.py       Public API: Engine, Result, CatalogProxy, demo()
   executor.py       Hybrid DuckDB executor with context algebra
   semantic.py       SemanticLowerer, SemanticAnalyzer, InMemoryCatalog
+  providers/        MCP/REMOTE protocols and reference implementations
   _builder.py       QueryBuilder fluent API
   _magic.py         Jupyter magic (%%cql, %cql_setup, %cql_contexts)
   cli.py            cql CLI entry point
@@ -67,14 +68,14 @@ contextql/          Python package
   parser.py         Lark-based parser
   linter.py         Semantic linter (11 rules)
 grammar/            Canonical Lark grammar (contextql.lark)
-tests/              pytest suite (319 tests)
-examples/           Runnable demos (lint_demo.py, context_showcase.py)
+tests/              pytest suite (361 tests)
+examples/           Runnable demos (procurement_showcase, federation_demo, context_showcase, lint_demo)
 vscode-contextql/   VS Code extension (LSP client)
 docs/               Tooling and LSP specifications
 agents/             Specialist agent specs and drafts
 SPEC.md             Language specification (v0.2)
 WHITEPAPER.md       Design whitepaper (43 sections)
-DECISIONS.md        Architectural decisions register (72 decisions)
+DECISIONS.md        Architectural decisions register (79 decisions)
 ```
 
 ## Quick Start
@@ -154,6 +155,27 @@ result.show()
 PY
 ```
 
+### Run the Procurement Showcase
+
+The procurement showcase walks through 7 escalating scenes of operational intelligence — from basic context queries to ML-augmented, cross-entity, federated analysis over the 240-invoice procurement dataset.
+
+```bash
+source .venv/bin/activate
+python -m pip install -e ".[executor]"
+python examples/procurement_showcase.py
+```
+
+Scenes covered:
+1. **Situational Awareness** — context union with `WEIGHT` and `CONTEXT_SCORE()`
+2. **Risk Amplification** — cross-entity `CONTEXT ON` with identity maps and JOINs
+3. **ML Augmentation** — MCP fraud-scoring provider
+4. **External Enrichment** — REMOTE Jira join with MCP context
+5. **Custom Intelligence** — `@context` decorator + QueryBuilder fluent API
+6. **Statistical Outliers** — `GLOBAL()` and `ZSCORE()` window macros
+7. **Executive Dashboard** — full pipeline + Result API + EXPLAIN
+
+For the federation-focused subset, run `python examples/federation_demo.py`.
+
 ### Use the Fluent Builder API
 
 ```bash
@@ -210,6 +232,52 @@ The `@ctx.context()` decorator is an alternative to `register_context()`:
 def late_invoice():
     return "SELECT invoice_id FROM invoices WHERE status = 'open' AND due_date < CURRENT_DATE"
 ```
+
+To register MCP providers with explicit entity keys:
+
+```python
+from contextql.providers import FraudDetectionMCP
+
+ctx.register_mcp_provider("fraud", FraudDetectionMCP(threshold=0.6), entity_key="invoice_id")
+```
+
+### MCP & REMOTE Federation
+
+ContextQL can pull context from external ML models (MCP providers) and join federated data sources (REMOTE providers):
+
+```python
+import contextql as cql
+from contextql.providers import FraudDetectionMCP, JiraRemoteProvider
+
+engine = cql.demo()
+
+# Register an MCP context provider (ML fraud model)
+engine.register_mcp_provider("fraud", FraudDetectionMCP(threshold=0.6))
+
+# Register a REMOTE data source (Jira issue tracker)
+engine.register_remote_provider("jira", JiraRemoteProvider())
+
+# Query combining SQL contexts + MCP + REMOTE
+result = engine.execute("""
+    SELECT i.invoice_id, i.amount, j.status AS jira_status,
+           CONTEXT_SCORE() AS risk
+    FROM invoices AS i
+    JOIN REMOTE(jira.issues) AS j ON i.invoice_id = j.issue_id
+    WHERE CONTEXT IN (MCP(fraud), overdue_invoice)
+    ORDER BY CONTEXT DESC
+    LIMIT 10;
+""")
+result.show()
+```
+
+For cross-entity resolution (e.g., MCP provider returns vendor IDs but the query is on invoices), register an identity map and specify the entity key:
+
+```python
+engine.register_mcp_provider("vendor_risk", VendorRiskMCP(), entity_key="vendor_id")
+engine.register_identity_map("vendor", {"invoices.vendor_id": "vendors.vendor_id"})
+```
+
+Built-in reference providers: `FraudDetectionMCP`, `PriorityMCP`, `JiraRemoteProvider`. Implement your own by following the `MCPProvider` or `RemoteProvider` protocol.
 
 ### Parse Without Running Queries
 

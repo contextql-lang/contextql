@@ -11,66 +11,10 @@ Run from the repo root with the executor extras installed:
 
 from __future__ import annotations
 
-import random
-
 import pandas as pd
 
 import contextql as cql
-from contextql.providers import MCPResult, RemoteResult
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Demo provider classes
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class FraudMCP:
-    """Simulates an ML fraud-scoring model.
-
-    Flags invoices with a synthetic 'fraud amount' above 15 000 as high-fraud.
-    The pseudo-random amount for invoice i is: 250 + ((i * 137) % 24000).
-    """
-
-    def resolve(self, entity_type, params, limit=None):
-        fraud_ids = [i for i in range(1, 241) if (250 + ((i * 137) % 24000)) > 15_000]
-        scores = [(250 + ((i * 137) % 24000)) / 24_250.0 for i in fraud_ids]
-        return MCPResult(
-            entity_type=entity_type,
-            entity_ids=fraud_ids,
-            scores=scores,
-        )
-
-
-class PriorityMCP:
-    """Simulates a priority-scoring model (amount-based, all invoices)."""
-
-    def resolve(self, entity_type, params, limit=None):
-        all_ids = list(range(1, 241))
-        scores = [(250 + ((i * 137) % 24000)) / 24_250.0 for i in all_ids]
-        return MCPResult(
-            entity_type=entity_type,
-            entity_ids=all_ids,
-            scores=scores,
-        )
-
-
-class JiraRemote:
-    """Simulates a Jira-like issue tracker.
-
-    Issues 1–30 correspond to invoice IDs 1–30.
-    """
-
-    def query(self, resource, filters, columns, limit=None):
-        rng = random.Random(42)
-        rows = [
-            {
-                "issue_id": i,
-                "status": rng.choice(["OPEN", "IN_PROGRESS", "CLOSED"]),
-                "priority": rng.choice(["HIGH", "MEDIUM", "LOW"]),
-            }
-            for i in range(1, 241)
-        ]
-        return RemoteResult(rows=rows)
+from contextql.providers import FraudDetectionMCP, PriorityMCP, JiraRemoteProvider
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -100,12 +44,15 @@ def build_engine() -> cql.Engine:
         entity_key="invoice_id",
     )
 
-    # MCP providers
-    engine.register_mcp_provider("fraud_model", FraudMCP())
+    # MCP providers (from contextql.providers package)
+    engine.register_mcp_provider(
+        "fraud_model",
+        FraudDetectionMCP(threshold=15_000 / 24_250),
+    )
     engine.register_mcp_provider("priority_model", PriorityMCP())
 
     # REMOTE provider
-    engine.register_remote_provider("jira", JiraRemote())
+    engine.register_remote_provider("jira", JiraRemoteProvider(seed=42))
 
     return engine
 
