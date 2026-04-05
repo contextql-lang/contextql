@@ -1,8 +1,8 @@
 # ContextQL
 
-**ContextQL** is a SQL-first query language that introduces **contexts as first-class query primitives** for operational intelligence.
+**ContextQL** is a SQL-first context resolution engine for defining, composing, and querying operational situations as first-class objects.
 
-A context is a named, reusable operational situation — a risk condition, process anomaly, compliance violation, or any business-meaningful condition that needs to be queried, composed, ranked, and governed.
+A context is a named, reusable business situation — a risk condition, process anomaly, compliance violation, or any operational condition that needs to be resolved, composed, scored, and governed across distributed systems.
 
 ```sql
 SELECT invoice_id, vendor_name, amount, CONTEXT_SCORE() AS risk_score
@@ -12,6 +12,27 @@ WHERE CONTEXT ON i IN (late_invoice, high_value WEIGHT 0.8)
 ORDER BY CONTEXT DESC
 LIMIT 20;
 ```
+
+## The Context Resolution Layer
+
+Semantic layers standardize the meaning of data. ContextQL resolves **context** — which situations apply to which entities right now, with what urgency, and from what evidence.
+
+ContextQL sits alongside (not above) the semantic layer as a **context resolution layer** that federates situational truth across systems, identity boundaries, and external intelligence providers:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  APPLICATION / DASHBOARD / LLM AGENT                         │
+├──────────────────────────────────────────────────────────────┤
+│  CONTEXT RESOLUTION LAYER (ContextQL)                        │
+│  Contexts · Algebra · Scoring · Federation · Lifecycle       │
+├──────────────────────────────────────────────────────────────┤
+│  SEMANTIC LAYER               │  DATA LAYER                  │
+│  Standardized meaning         │  Tables · Events · Streams   │
+│  (dbt, Cube, Looker, etc.)    │  (DuckDB, PG, Polars, etc.)  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+A semantic layer tells you "amount means this column, in this currency." ContextQL tells you "this invoice is overdue, disputed, and flagged by the fraud model — with a combined risk score of 0.87."
 
 ## Why not SQL views?
 
