@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -20,10 +20,30 @@ from contextql.semantic import (
 
 
 @dataclass
+class ProviderCall:
+    """Record of a single provider invocation during execution."""
+    provider_name: str
+    provider_type: str  # "MCP" or "REMOTE"
+    entity_count: int
+    elapsed_ms: float
+    data_as_of: Optional[str] = None
+
+
+@dataclass
+class ContextTrace:
+    """Execution trace capturing provenance of context resolution."""
+    contexts_resolved: List[str] = field(default_factory=list)
+    provider_calls: List[ProviderCall] = field(default_factory=list)
+    identity_maps_used: List[str] = field(default_factory=list)
+    score_breakdown: Dict = field(default_factory=dict)
+
+
+@dataclass
 class ExecutionResult:
     dataframe: pd.DataFrame
     generated_sql: str
     analysis: AnalysisResult
+    trace: Optional[ContextTrace] = None
 
 
 class ContextQLExecutor:
@@ -85,10 +105,12 @@ class ContextQLExecutor:
 
         df, generated_sql = self._execute_query(stmt)
 
+        trace = getattr(self, '_trace', None)
         return ExecutionResult(
             dataframe=df,
             generated_sql=generated_sql,
             analysis=analysis,
+            trace=trace,
         )
 
     # ---------------------------------------------------------
@@ -96,8 +118,9 @@ class ContextQLExecutor:
     # ---------------------------------------------------------
 
     def _execute_query(self, query: QueryModel) -> Tuple[pd.DataFrame, str]:
-        # Clear per-query MCP result cache
+        # Clear per-query MCP result cache and init trace
         self._mcp_result_cache = {}
+        self._trace = ContextTrace()
 
         # Materialise REMOTE sources before building SQL
         temp_tables = self._materialize_remote_sources(query)
@@ -177,6 +200,7 @@ class ContextQLExecutor:
             from concurrent.futures import ThreadPoolExecutor
             from concurrent.futures import TimeoutError as FuturesTimeoutError
 
+            _remote_t0 = __import__('time').perf_counter()
             with ThreadPoolExecutor(max_workers=1) as ex:
                 future = ex.submit(
                     provider.query,
@@ -196,6 +220,14 @@ class ContextQLExecutor:
                     )
 
             remote_df = remote_result.to_dataframe()
+            _remote_elapsed = (__import__('time').perf_counter() - _remote_t0) * 1000
+            if hasattr(self, '_trace'):
+                self._trace.provider_calls.append(ProviderCall(
+                    provider_name=provider_name,
+                    provider_type="REMOTE",
+                    entity_count=len(remote_df),
+                    elapsed_ms=_remote_elapsed,
+                ))
             temp_name = f"__remote_{provider_name}_{resource.replace('.', '_')}"
             self.adapter.conn.register(temp_name, remote_df)
 
@@ -271,6 +303,11 @@ class ContextQLExecutor:
                     if mapped is None:
                         continue
                     effective_key = mapped
+                    # Record identity map usage in trace
+                    if hasattr(self, '_trace'):
+                        map_desc = f"{key_name} -> {mapped}"
+                        if map_desc not in self._trace.identity_maps_used:
+                            self._trace.identity_maps_used.append(map_desc)
                 if effective_key.lower() in proj_text or effective_key in extra:
                     continue
                 if pred.binding_alias:
@@ -569,6 +606,7 @@ class ContextQLExecutor:
             cache_key = (ref.name, entity_type, frozenset(params.items()))
 
             if cache_key not in self._mcp_result_cache:
+                _mcp_t0 = __import__('time').perf_counter()
                 with ThreadPoolExecutor(max_workers=1) as ex:
                     future = ex.submit(
                         provider.resolve,
@@ -600,11 +638,25 @@ class ContextQLExecutor:
                         f"'{entity_type}'."
                     )
 
+                _mcp_elapsed = (__import__('time').perf_counter() - _mcp_t0) * 1000
                 self._mcp_result_cache[cache_key] = mcp_result
+                # Record in trace
+                if hasattr(self, '_trace'):
+                    self._trace.provider_calls.append(ProviderCall(
+                        provider_name=ref.name,
+                        provider_type="MCP",
+                        entity_count=len(mcp_result.entity_ids),
+                        elapsed_ms=_mcp_elapsed,
+                        data_as_of=getattr(mcp_result, 'data_as_of', None),
+                    ))
 
             mcp_result = self._mcp_result_cache[cache_key]
             entity_ids = set(mcp_result.entity_ids)
             key_col = self._resolve_mcp_key_column(df, query, pred, ref.name)
+            # Record context in trace
+            _mcp_label = f"MCP({ref.name})"
+            if hasattr(self, '_trace') and _mcp_label not in self._trace.contexts_resolved:
+                self._trace.contexts_resolved.append(_mcp_label)
             return df[key_col].isin(entity_ids)
 
         try:
@@ -618,6 +670,9 @@ class ContextQLExecutor:
         values = df[key_col]
 
         context_keys = self.adapter.resolve_context_keys(ref.name)
+        # Record native context in trace
+        if hasattr(self, '_trace') and ref.name not in self._trace.contexts_resolved:
+            self._trace.contexts_resolved.append(ref.name)
         return values.isin(context_keys)
 
     def _resolve_via_identity_map(

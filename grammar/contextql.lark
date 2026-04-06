@@ -4,6 +4,7 @@
 start: statement (SEMICOLON statement)* SEMICOLON?
 
 ?statement: select_stmt
+          | explain_context_stmt
           | create_context_stmt
           | alter_context_stmt
           | drop_context_stmt
@@ -67,6 +68,11 @@ sort_dir: ASC | DESC
 nulls_order: NULLS (FIRST | LAST)
 limit_clause: LIMIT int_literal
 offset_clause: OFFSET int_literal
+
+// =========================
+// EXPLAIN CONTEXT
+// =========================
+explain_context_stmt: EXPLAIN CONTEXT qualified_name (FOR expr)?
 
 // =========================
 // CONTEXT PREDICATES
@@ -442,6 +448,7 @@ WEIGHTED_SUM: /WEIGHTED_SUM/i
 ASC: /ASC/i
 DESC: /DESC/i
 DEFINITION: /DEFINITION/i
+EXPLAIN: /EXPLAIN/i
 DATE: /DATE/i
 INTERVAL: /INTERVAL/i
 
