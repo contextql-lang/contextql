@@ -64,7 +64,7 @@ Implementation license: Apache 2.0
 
 Modern operational analytics systems struggle to express **business situations** in a reusable and governed way. Traditional SQL excels at querying tables, but it lacks a native abstraction for **operational contexts** such as risk situations, delays, compliance violations, or process anomalies. Process mining systems partially address this challenge but often rely on proprietary query languages and tightly coupled execution environments.
 
-This paper proposes **ContextQL**, a SQL-first query language that introduces **contexts as first-class query primitives** while remaining compatible with modern columnar analytics engines. ContextQL combines SQL-compatible syntax, reusable operational contexts, a formal context set algebra, process intelligence functions, retrieval-style ranking, columnar and vectorized execution, and a governed lifecycle for context management.
+This paper proposes **ContextQL**, a SQL-first context resolution engine that introduces **contexts as first-class query primitives** while remaining compatible with modern columnar analytics engines. Where semantic layers standardize the *meaning* of data, ContextQL resolves *context* — which operational situations apply to which entities, with what urgency, from what evidence, across which systems. ContextQL combines SQL-compatible syntax, reusable operational contexts, a formal context set algebra, process intelligence functions, retrieval-style ranking, columnar and vectorized execution, and a governed lifecycle for context management.
 
 The architecture introduces a new operational layer called **Context Operations (Context Ops)** responsible for computing, caching, governing, and maintaining context membership. Together with a three-tier physical storage model (roaring bitmaps, Apache Arrow columnar tables, and Parquet files), these components form a scalable platform for **context-aware operational intelligence**, capable of millisecond-class retrieval for high-priority business situations.
 
@@ -188,20 +188,21 @@ Existing analytics architectures follow a layered model:
 data storage  ->  query engines  ->  semantic layers  ->  dashboards
 ```
 
-Operational decision systems, however, require an additional abstraction:
+Semantic layers (dbt, Cube, Looker) standardize what data *means* — metric definitions, dimension relationships, naming conventions. But operational decision systems require resolving what *situations apply* — a fundamentally different concern:
 
 ```
 data  ->  events  ->  objects  ->  contexts  ->  metrics  ->  queries
 ```
 
-Contexts represent **situational conditions** that span multiple tables, events, or processes. Without contexts:
+Contexts represent **situational conditions** that span multiple tables, events, processes, and external systems. They require **cross-system federation** (which entities does the fraud model flag?), **formal composition** (which are BOTH overdue AND from risky vendors?), and **scored ranking** (which are most urgent?). No semantic layer provides this. Without a dedicated context resolution layer:
 
 - Business logic is duplicated across queries, dashboards, and applications.
 - Queries become difficult to maintain as operational rules evolve.
 - Operational prioritization is difficult because ranking requires combining signals from multiple conditions.
+- Cross-system context (ML models, external trackers, process mining) requires ad-hoc ETL pipelines.
 - Governance is impossible because there is no named, versioned, auditable artifact representing a business situation.
 
-ContextQL addresses this gap by elevating operational situations to first-class query primitives with formal algebra, lifecycle management, and federated composition.
+ContextQL addresses this gap as a **context resolution layer** — elevating operational situations to first-class query primitives with formal algebra, lifecycle management, and federated composition across distributed systems.
 
 ---
 
@@ -2577,7 +2578,7 @@ The following capabilities are identified for v2 and beyond:
 
 # 43. Conclusion
 
-ContextQL introduces a new abstraction for operational intelligence by elevating **contexts to first-class query primitives**. The formal context set algebra -- union, intersection, negation, weighted composition, and conditional chains -- provides a rigorous foundation for composing operational situations. The type system ensures correctness at the context layer while delegating value-level operations to proven execution engines.
+ContextQL introduces a **context resolution layer** for operational intelligence — a dedicated architectural layer that resolves which situations apply to which entities, with what urgency, from what evidence, across which systems. By elevating **contexts to first-class query primitives**, ContextQL fills the gap between semantic layers (which standardize data meaning) and applications (which need situational awareness). The formal context set algebra -- union, intersection, negation, weighted composition, and conditional chains -- provides a rigorous foundation for composing operational situations. The type system ensures correctness at the context layer while delegating value-level operations to proven execution engines.
 
 The nine-state lifecycle, managed by Context Ops, ensures that contexts remain fresh, consistent, and governed across production environments. The three-tier physical storage model delivers millisecond-class retrieval through roaring bitmaps, while the MVCC concurrency model ensures query isolation during concurrent refreshes.
 
@@ -2585,7 +2586,7 @@ Process intelligence functions bring process mining capabilities directly into t
 
 The security model -- from privilege-based access control through classification propagation to hash-chained audit logs -- ensures that ContextQL is production-ready for regulated industries. The developer experience, from a 7-line first query to full LSP integration, ensures that the power of the language is accessible to practitioners.
 
-By combining SQL compatibility, process intelligence, retrieval-style ranking, federated composition, and context lifecycle management, ContextQL enables scalable systems capable of answering the most important operational question:
+By combining SQL compatibility, process intelligence, retrieval-style ranking, federated composition, and context lifecycle management, ContextQL provides a context resolution layer capable of federating situational truth across systems, identities, and organizational boundaries — answering the most important operational question:
 
 > **Which situations matter most right now?**
 

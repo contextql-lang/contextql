@@ -90,6 +90,20 @@ class Result:
         """Any analysis diagnostics raised during query planning."""
         return self._result.analysis.diagnostics
 
+    @property
+    def trace(self):
+        """Execution trace with context resolution provenance.
+
+        Returns a ``ContextTrace`` with:
+        - ``contexts_resolved``: context names resolved during execution
+        - ``provider_calls``: MCP/REMOTE provider invocations with timing
+        - ``identity_maps_used``: identity map bridges used
+        - ``score_breakdown``: per-context score contributions
+
+        Returns ``None`` if no trace was captured.
+        """
+        return self._result.trace
+
     def __repr__(self) -> str:
         rows = len(self._result.dataframe)
         return f"<Result rows={rows}>"
