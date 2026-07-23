@@ -173,6 +173,42 @@ class RemoteResult:
         return pd.DataFrame(self.rows)
 
 
+@dataclass(frozen=True)
+class EntityFilter:
+    """Bounded entity-key membership pushed into a REMOTE provider."""
+
+    column: str
+    entity_ids: tuple[int, ...] | None = None
+    membership_bitmap: bytes | None = None
+    bitmap_encoding: str | None = None
+
+    def __post_init__(self) -> None:
+        has_ids = self.entity_ids is not None
+        has_bitmap = self.membership_bitmap is not None
+        if has_ids == has_bitmap:
+            raise ValueError(
+                "EntityFilter requires exactly one of entity_ids or "
+                "membership_bitmap."
+            )
+        if has_bitmap and self.bitmap_encoding != "roaring64":
+            raise ValueError(
+                "Bitmap entity filters require bitmap_encoding='roaring64'."
+            )
+
+    @property
+    def cardinality(self) -> int:
+        if self.entity_ids is not None:
+            return len(self.entity_ids)
+        from pyroaring import BitMap64
+        return len(BitMap64.deserialize(self.membership_bitmap or b""))
+
+    def ids(self):
+        if self.entity_ids is not None:
+            return self.entity_ids
+        from pyroaring import BitMap64
+        return BitMap64.deserialize(self.membership_bitmap or b"")
+
+
 @runtime_checkable
 class MCPProvider(Protocol):
     """Protocol for MCP context providers.
@@ -234,4 +270,6 @@ class RemoteProvider(Protocol):
         filters: dict,
         columns: list[str],
         limit: int | None = None,
+        *,
+        entity_filter: EntityFilter | None = None,
     ) -> RemoteResult: ...

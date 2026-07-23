@@ -172,3 +172,18 @@ ten-million-row demonstration.
 - Correlation IDs flow across connector calls and query traces.
 - Evidence rows are not fetched before membership narrowing unless the query
   explicitly requires them.
+
+## 8. Hardening invariants
+
+- Catalog names resolve as `(namespace, name)` while snapshot payloads,
+  history, and synchronizer state use immutable `context_id`.
+- A current snapshot is eligible only when its version and definition hash
+  match the catalog pointer.
+- Explicit `storage = 'set'` and `storage = 'roaring'` are honored per
+  snapshot; explicit Roaring never silently falls back.
+- Definition results and DuckDB membership relations are consumed in bounded
+  batches.
+- Roaring delta and algebra paths remain bitmap-native.
+- Persistent promotion writes payload, metadata, pointer, history, and
+  committed watermark in one transaction.
+- Retention preserves one anchor snapshot plus all later events.

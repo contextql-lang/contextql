@@ -333,6 +333,38 @@ temporal qualifiers (`AT`, `BETWEEN`), which are resolved against recorded
 membership history — not against timestamps embedded in a bitmap. A bitmap
 never contains per-member timestamps or evidence.
 
+### Hardening semantics
+
+`context_name AT VERSION <positive-integer>` selects an immutable snapshot
+version directly. `AT <timestamp>` resolves membership and score at one UTC
+event-time instant. `BETWEEN <start> AND <end>` returns entities that were
+members at any instant in the inclusive interval and uses the maximum score
+observed while each entity was a member. Timestamps require an explicit
+timezone. Requests older than retained history fail with E202; reversed ranges
+fail with E203.
+
+For native SQL definitions, `manual` performs a full refresh on
+`REFRESH CONTEXT`, and `scheduled` asks the server scheduler to perform that
+same full refresh at `refresh_interval`. Native `incremental` definitions fail
+with E161 because arbitrary result SQL cannot infer removals safely.
+Connector-managed contexts may use `incremental` when their provider supplies
+an ordered, idempotent change feed.
+
+`source_watermark` names a projected result column. A successful native
+refresh stores its maximum observed non-null value, never the configured
+column name.
+
+An ordinary materialized query uses a snapshot only when its context ID,
+snapshot version, definition hash, state, and payload checksum match the
+catalog's current pointer. Definition replacement invalidates that pointer and
+ordinary queries fail with E200 until refresh. Rename retains the immutable
+context ID and snapshot pointer. Drop/recreate creates a new context ID.
+
+When a context-filtered local table is equality-joined to a REMOTE resource,
+context algebra executes first and the surviving entity membership is passed
+to the provider as an entity filter. An unsafe join fails with E301; a provider
+without entity-filter support fails with E302.
+
 ---
 
 ## 7. ALTER CONTEXT

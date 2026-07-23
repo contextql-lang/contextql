@@ -87,6 +87,12 @@ source_watermark
 next_cursor
 ```
 
+`RemoteProvider.query` also accepts an optional `EntityFilter` containing the
+remote join column and either a bounded ID tuple or a portable `roaring64`
+payload. Context-filtered REMOTE joins require this capability. The DeepSee
+mock rejects evidence outside the requested membership and records requested
+and returned cardinality for trace/audit verification.
+
 A large bitmap is never expanded into a Python list inside the connector or
 executor — it is handed to the membership store in its serialized form and
 validated (size, key bounds, cardinality) before decoding.

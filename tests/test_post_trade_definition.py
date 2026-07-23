@@ -17,7 +17,7 @@ CLASSIFICATION internal
 WITH (
     materialized = TRUE,
     storage = 'roaring',
-    refresh_mode = 'incremental',
+    refresh_mode = 'scheduled',
     refresh_interval = '1 minute',
     stale_after = '2 minutes',
     history = TRUE,

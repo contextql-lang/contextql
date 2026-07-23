@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -25,6 +26,11 @@ from typing import Any, Dict, List, Optional, Protocol, Sequence
 from lark import Token, Tree
 
 from .context_options import validate_context_options
+from .context_names import (
+    DEFAULT_NAMESPACE,
+    context_catalog_key,
+    qualify_context_name,
+)
 from .errors import Severity
 from .parser import ContextQLParser
 
@@ -71,10 +77,11 @@ class ParameterBinding:
 
 @dataclass
 class TemporalQualifier:
-    mode: str  # "AT" | "BETWEEN"
+    mode: str  # "AT" | "BETWEEN" | "VERSION"
     at_value: Optional[str] = None
     start_value: Optional[str] = None
     end_value: Optional[str] = None
+    version: Optional[int] = None
 
 
 @dataclass
@@ -308,8 +315,8 @@ class ContextCatalogEntry:
     has_score: bool = False
     dependencies: List[str] = field(default_factory=list)
     # Plan section 6.2 metadata
-    context_id: Optional[str] = None
-    namespace: Optional[str] = None
+    context_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    namespace: str = DEFAULT_NAMESPACE
     version: int = 1
     definition_hash: Optional[str] = None
     lifecycle_state: str = "draft"
@@ -326,6 +333,21 @@ class ContextCatalogEntry:
     definition_sql: Optional[str] = None
     composition: Optional[ContextComposition] = None
     score_expression: Optional[str] = None
+    temporal_column: Optional[str] = None
+    temporal_granularity: Optional[str] = None
+    source_kind: str = "native"
+    history_available_from: Optional[datetime] = None
+    last_refresh_error: Optional[str] = None
+
+    @property
+    def qualified_name(self) -> str:
+        if self.namespace.lower() == DEFAULT_NAMESPACE:
+            return self.name
+        return f"{self.namespace}.{self.name}"
+
+    @property
+    def catalog_key(self) -> str:
+        return context_catalog_key(self.name, self.namespace)
 
 
 @dataclass
@@ -365,9 +387,32 @@ class InMemoryCatalog:
     event_logs: Dict[str, EventLogCatalogEntry] = field(default_factory=dict)
     process_models: Dict[str, ProcessModelCatalogEntry] = field(default_factory=dict)
     tables: Dict[str, TableCatalogEntry] = field(default_factory=dict)
+    default_namespace: str = DEFAULT_NAMESPACE
 
     def get_context(self, name: str) -> Optional[ContextCatalogEntry]:
+        key = context_catalog_key(
+            name, default_namespace=self.default_namespace
+        )
+        entry = self.contexts.get(key)
+        if entry is not None:
+            return entry
+        # Backward compatibility for callers constructing fixture catalogs
+        # directly instead of using put_context().
         return self.contexts.get(name.lower())
+
+    def put_context(self, entry: ContextCatalogEntry) -> None:
+        self.contexts[entry.catalog_key] = entry
+
+    def remove_context(self, name: str) -> Optional[ContextCatalogEntry]:
+        key = context_catalog_key(
+            name, default_namespace=self.default_namespace
+        )
+        return self.contexts.pop(key, None)
+
+    def qualify_context(self, name: str):
+        return qualify_context_name(
+            name, default_namespace=self.default_namespace
+        )
 
     def list_contexts(self) -> Sequence[ContextCatalogEntry]:
         return list(self.contexts.values())
@@ -708,11 +753,22 @@ class SemanticLowerer:
         at_value = None
         start_value = None
         end_value = None
+        version = None
+
+        has_version = any(
+            isinstance(c, Token) and c.type == "VERSION"
+            for c in node.children
+        )
 
         has_between = any(
             isinstance(c, Token) and c.type == "BETWEEN" for c in node.children
         )
-        if has_between:
+        if has_version:
+            mode = "VERSION"
+            for child in node.children:
+                if isinstance(child, Token) and child.type in ("NUMBER", "INT"):
+                    version = int(child.value)
+        elif has_between:
             mode = "BETWEEN"
             literals = [c for c in node.children if isinstance(c, Tree) and c.data == "literal"]
             if len(literals) >= 2:
@@ -723,8 +779,13 @@ class SemanticLowerer:
                 if isinstance(child, Tree) and child.data == "literal":
                     at_value = self._tree_text(child)
 
-        return TemporalQualifier(mode=mode, at_value=at_value,
-                                 start_value=start_value, end_value=end_value)
+        return TemporalQualifier(
+            mode=mode,
+            at_value=at_value,
+            start_value=start_value,
+            end_value=end_value,
+            version=version,
+        )
 
     def _lower_order_item(self, node: Tree) -> OrderItem:
         is_context = any(

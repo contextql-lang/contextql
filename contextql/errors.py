@@ -124,12 +124,30 @@ E159 = ErrorCode("E159", Severity.ERROR, "DROP_RESTRICT_DEPENDENTS",
 E160 = ErrorCode("E160", Severity.ERROR, "INVALID_OPTION_VALUE",
                  "invalid value {value!r} for context option {name!r}; "
                  "expected {expected}")
+E161 = ErrorCode("E161", Severity.ERROR, "NATIVE_INCREMENTAL_UNSUPPORTED",
+                 "incremental refresh is unsupported for native SQL context "
+                 "{name!r}; use scheduled/manual refresh or a connector "
+                 "change feed")
+E162 = ErrorCode("E162", Severity.ERROR, "ROARING_BACKEND_UNAVAILABLE",
+                 "storage = 'roaring' requires the optional PyRoaring backend")
 
 # ── Runtime errors (E200-E299) ──────────────────────────────────────────
 
 E200 = ErrorCode("E200", Severity.ERROR, "SNAPSHOT_MISSING",
                  "context {name!r} is materialized but has no current "
                  "snapshot; run REFRESH CONTEXT {name}")
+E201 = ErrorCode("E201", Severity.ERROR, "SNAPSHOT_INCOMPATIBLE",
+                 "snapshot for context {name!r} is corrupt or incompatible")
+E202 = ErrorCode("E202", Severity.ERROR, "HISTORY_UNAVAILABLE",
+                 "requested time predates retained history for context {name!r}")
+E203 = ErrorCode("E203", Severity.ERROR, "INVALID_TEMPORAL_RANGE",
+                 "temporal range start must not be after its end")
+
+# Federation errors
+E301 = ErrorCode("E301", Severity.ERROR, "REMOTE_NARROWING_UNSAFE",
+                 "REMOTE join cannot be safely narrowed by context membership")
+E302 = ErrorCode("E302", Severity.ERROR, "REMOTE_FILTER_UNSUPPORTED",
+                 "REMOTE provider does not support required entity filtering")
 
 # ── Semantic warnings (W100-W199) ───────────────────────────────────────
 

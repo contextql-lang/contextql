@@ -1343,4 +1343,63 @@ Keeps CS-3 intact while giving temporal queries a well-defined data source.
 
 ---
 
+## CS-17 — Immutable context identity
+
+**Decision:** Catalog resolution uses `(namespace, name)`. Membership,
+snapshots, history, and connector state use an immutable UUID `context_id`.
+Rename retains the UUID; drop/recreate does not.
+
+**Version:** v0.3
+
+---
+
+## CS-18 — Snapshot compatibility is centrally enforced
+
+**Decision:** Every materialized execution path uses one resolver that checks
+the catalog pointer, context ID, snapshot version, definition hash, state, and
+payload integrity. Definition changes invalidate the current pointer.
+
+**Version:** v0.3
+
+---
+
+## CS-19 — Native incremental refresh requires a change feed
+
+**Decision:** Native SQL contexts support manual and scheduled full refresh.
+Incremental refresh is reserved for connector-managed contexts with ordered,
+idempotent additions, removals, and score changes.
+
+**Version:** v0.3
+
+---
+
+## CS-20 — Executable DDL is the catalog write path
+
+**Decision:** Server REST operations delegate to engine DDL and durable
+repositories. Startup hydrates persisted semantic entries and snapshots; it
+does not reconstruct them through `register_context()`.
+
+**Version:** v0.3
+
+---
+
+## CS-21 — Context-filtered REMOTE joins are bounded
+
+**Decision:** Local context algebra precedes REMOTE evidence retrieval. The
+provider receives the surviving entity filter or execution fails before any
+unbounded provider call.
+
+**Version:** v0.3
+
+---
+
+## CS-22 — Temporal ranges use event history
+
+**Decision:** `AT` and `BETWEEN` replay event-time membership history from a
+retained anchor; `AT VERSION` selects an immutable snapshot directly.
+
+**Version:** v0.3
+
+---
+
 # End of DECISIONS.md

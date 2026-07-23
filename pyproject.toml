@@ -23,6 +23,7 @@ lsp = [
 executor = [
     "duckdb>=0.10",
     "pandas>=2.0",
+    "pytz>=2024.1",
 ]
 arrow = [
     "pyarrow>=12.0",

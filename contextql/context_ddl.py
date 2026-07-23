@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -22,6 +23,13 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 from .context_options import resolve_materialization
+from .context_options import parse_duration_seconds
+from .catalog_repository import InMemoryCatalogRepository
+from .context_names import (
+    DEFAULT_NAMESPACE,
+    context_catalog_key,
+    qualify_context_name,
+)
 from .errors import E159
 from .history import MembershipHistoryStore, derive_changes
 from .membership import make_membership_store
@@ -67,6 +75,7 @@ class ContextDDLExecutor:
         adapter,
         membership=None,
         history: Optional[MembershipHistoryStore] = None,
+        repository=None,
     ) -> None:
         self.catalog = catalog
         self.adapter = adapter
@@ -77,7 +86,13 @@ class ContextDDLExecutor:
             else make_membership_store("auto")
         self.history = history if history is not None \
             else MembershipHistoryStore()
+        self.repository = (
+            repository if repository is not None
+            else InMemoryCatalogRepository()
+        )
         self.audit_callbacks: List[AuditCallback] = []
+        self.last_refresh_max_batch_size = 0
+        self._refresh_locks: Dict[str, threading.Lock] = {}
 
     # ------------------------------------------------------------------
     # Dispatch
@@ -105,7 +120,8 @@ class ContextDDLExecutor:
     # ------------------------------------------------------------------
 
     def _create(self, stmt: ContextDefinitionModel) -> pd.DataFrame:
-        key = stmt.name.lower()
+        namespace = stmt.namespace or DEFAULT_NAMESPACE
+        key = context_catalog_key(stmt.name, namespace)
         existing = self.catalog.contexts.get(key)
         if existing is not None and not stmt.or_replace:
             raise ValueError(
@@ -149,7 +165,7 @@ class ContextDDLExecutor:
             context_id=(
                 existing.context_id if existing is not None else str(uuid.uuid4())
             ),
-            namespace=stmt.namespace,
+            namespace=namespace,
             version=version,
             definition_hash=stmt.definition_hash(),
             lifecycle_state="active",
@@ -160,16 +176,35 @@ class ContextDDLExecutor:
             definition_sql=stmt.definition_sql,
             composition=stmt.composition,
             score_expression=stmt.score_expression,
+            temporal_column=stmt.temporal_column,
+            temporal_granularity=stmt.temporal_granularity,
         )
 
         if stmt.definition_sql is not None:
             self._register_with_adapter(entry)
-        self.catalog.contexts[key] = entry
-        self._audit("create_context", stmt.name, version=version)
-        return self._status_frame("create_context", stmt.name)
+        membership_key = entry.context_id or entry.qualified_name
+        if hasattr(self.membership, "register_alias"):
+            self.membership.register_alias(
+                entry.qualified_name, membership_key
+            )
+        if hasattr(self.history, "register_alias"):
+            self.history.register_alias(
+                entry.qualified_name, membership_key
+            )
+        self.catalog.put_context(entry)
+        self.repository.save_context(entry, raw_ddl=stmt.raw_sql)
+        self._audit(
+            "create_context",
+            entry.qualified_name,
+            context_id=entry.context_id,
+            version=version,
+            definition_hash=entry.definition_hash,
+        )
+        return self._status_frame("create_context", entry.qualified_name)
 
     def _check_dependencies(self, stmt: ContextDefinitionModel) -> None:
-        own = stmt.name.lower()
+        namespace = stmt.namespace or DEFAULT_NAMESPACE
+        own = context_catalog_key(stmt.name, namespace)
         referenced: List[str] = []
         if stmt.composition is not None:
             referenced = [item.name for item in stmt.composition.items]
@@ -177,12 +212,15 @@ class ContextDDLExecutor:
             referenced = list(stmt.dependencies)
 
         for ref in referenced:
-            if ref.lower() == own:
+            ref_key = context_catalog_key(
+                ref, default_namespace=self.catalog.default_namespace
+            )
+            if ref_key == own:
                 raise ValueError(
                     f"Context '{stmt.name}' references itself; "
                     "self-referential contexts are a dependency cycle."
                 )
-            if self.catalog.contexts.get(ref.lower()) is None:
+            if self.catalog.contexts.get(ref_key) is None:
                 raise ValueError(
                     f"Context '{stmt.name}' depends on undefined context "
                     f"'{ref}'."
@@ -192,6 +230,7 @@ class ContextDDLExecutor:
         self._check_entry_cycles(
             ContextCatalogEntry(
                 name=stmt.name,
+                namespace=namespace,
                 entity_key_name=stmt.entity_key_name or "",
                 dependencies=list(referenced),
             )
@@ -216,7 +255,7 @@ class ContextDDLExecutor:
         if entry.score_expression and _IDENTIFIER_RE.match(entry.score_expression):
             score_column = entry.score_expression
         self.adapter.register_context(
-            name=entry.name,
+            name=entry.qualified_name,
             sql=entry.definition_sql or "",
             entity_key_name=entry.entity_key_name,
             has_score=entry.has_score,
@@ -230,10 +269,13 @@ class ContextDDLExecutor:
 
     def _alter(self, stmt: AlterContextModel) -> pd.DataFrame:
         entry = self._require(stmt.name)
-        key = stmt.name.lower()
+        key = entry.catalog_key
 
         if stmt.action == "rename_to" and stmt.new_name:
-            new_key = stmt.new_name.lower()
+            new_qualified = qualify_context_name(
+                stmt.new_name, default_namespace=entry.namespace
+            )
+            new_key = new_qualified.key
             if new_key != key and new_key in self.catalog.contexts:
                 raise ValueError(
                     f"Cannot rename context '{stmt.name}' to "
@@ -247,18 +289,35 @@ class ContextDDLExecutor:
                     f"Cannot rename context '{stmt.name}': depended on by "
                     f"{names}. Drop or redefine the dependents first."
                 )
-            new_entry = replace(entry, name=stmt.new_name)
+            new_entry = replace(
+                entry,
+                name=new_qualified.name,
+                namespace=new_qualified.namespace,
+                version=entry.version + 1,
+            )
             del self.catalog.contexts[key]
             self.catalog.contexts[new_key] = new_entry
+            if hasattr(self.membership, "unregister_alias"):
+                self.membership.unregister_alias(entry.qualified_name)
+                self.membership.register_alias(
+                    new_entry.qualified_name,
+                    new_entry.context_id or new_entry.qualified_name,
+                )
+            if hasattr(self.history, "unregister_alias"):
+                self.history.unregister_alias(entry.qualified_name)
+                self.history.register_alias(
+                    new_entry.qualified_name,
+                    new_entry.context_id or new_entry.qualified_name,
+                )
             if new_entry.definition_sql is not None:
-                self.adapter.unregister_context(entry.name)
+                self.adapter.unregister_context(entry.qualified_name)
                 self._register_with_adapter(new_entry)
         elif stmt.action == "set_definition" and stmt.definition_sql:
             new_dependencies = self._extract_sql_dependencies(
                 stmt.definition_sql, own_name=entry.name
             )
             for dep in new_dependencies:
-                if self.catalog.contexts.get(dep.lower()) is None:
+                if self.catalog.get_context(dep) is None:
                     raise ValueError(
                         f"Context '{entry.name}' new definition depends on "
                         f"undefined context '{dep}'."
@@ -279,21 +338,37 @@ class ContextDDLExecutor:
                 entry,
                 score_expression=stmt.score_expression,
                 has_score=stmt.score_expression is not None,
+                version=entry.version + 1,
+                current_snapshot_version=None,
             )
+            new_entry.definition_hash = self._entry_hash(new_entry)
             self.catalog.contexts[key] = new_entry
             if new_entry.definition_sql is not None:
                 self._register_with_adapter(new_entry)
         elif stmt.action == "drop_score":
-            new_entry = replace(entry, score_expression=None, has_score=False)
+            new_entry = replace(
+                entry,
+                score_expression=None,
+                has_score=False,
+                version=entry.version + 1,
+                current_snapshot_version=None,
+            )
+            new_entry.definition_hash = self._entry_hash(new_entry)
             self.catalog.contexts[key] = new_entry
             if new_entry.definition_sql is not None:
                 self._register_with_adapter(new_entry)
         elif stmt.action == "set_description":
             self.catalog.contexts[key] = replace(
-                entry, description=stmt.description
+                entry,
+                description=stmt.description,
+                version=entry.version + 1,
             )
         elif stmt.action == "set_tags":
-            self.catalog.contexts[key] = replace(entry, tags=list(stmt.tags))
+            self.catalog.contexts[key] = replace(
+                entry,
+                tags=list(stmt.tags),
+                version=entry.version + 1,
+            )
         elif stmt.action == "set_state" and stmt.state:
             state = stmt.state.lower()
             if state not in LIFECYCLE_STATES:
@@ -309,8 +384,31 @@ class ContextDDLExecutor:
                 f"Unsupported ALTER CONTEXT action: {stmt.action!r}"
             )
 
-        self._audit("alter_context", stmt.name, alter_action=stmt.action)
-        return self._status_frame("alter_context", stmt.name)
+        updated = self.catalog.contexts.get(new_key if (
+            stmt.action == "rename_to" and stmt.new_name
+        ) else key)
+        if updated is not None:
+            self.repository.save_context(
+                updated,
+                raw_ddl=(
+                    None if stmt.action == "set_state" else stmt.raw_sql
+                ),
+            )
+        self._audit(
+            "alter_context",
+            updated.qualified_name if updated is not None else stmt.name,
+            context_id=entry.context_id,
+            alter_action=stmt.action,
+            version=updated.version if updated is not None else entry.version,
+            definition_hash=(
+                updated.definition_hash if updated is not None
+                else entry.definition_hash
+            ),
+        )
+        return self._status_frame(
+            "alter_context",
+            updated.qualified_name if updated is not None else stmt.name,
+        )
 
     def _extract_sql_dependencies(
         self, definition_sql: str, *, own_name: str
@@ -344,10 +442,20 @@ class ContextDDLExecutor:
     def _check_entry_cycles(self, entry: ContextCatalogEntry) -> None:
         """Reject dependency cycles for an updated catalog entry."""
         graph = {
-            name: [d.lower() for d in existing.dependencies]
+            name: [
+                context_catalog_key(
+                    d, default_namespace=self.catalog.default_namespace
+                )
+                for d in existing.dependencies
+            ]
             for name, existing in self.catalog.contexts.items()
         }
-        graph[entry.name.lower()] = [d.lower() for d in entry.dependencies]
+        graph[entry.catalog_key] = [
+            context_catalog_key(
+                d, default_namespace=self.catalog.default_namespace
+            )
+            for d in entry.dependencies
+        ]
         seen: set = set()
         stack: List[str] = []
 
@@ -366,7 +474,7 @@ class ContextDDLExecutor:
             stack.pop()
             seen.add(node)
 
-        visit(entry.name.lower())
+        visit(entry.catalog_key)
 
     def _entry_hash(self, entry: ContextCatalogEntry) -> str:
         model = ContextDefinitionModel(
@@ -386,13 +494,13 @@ class ContextDDLExecutor:
     # ------------------------------------------------------------------
 
     def _drop(self, stmt: DropContextModel) -> pd.DataFrame:
-        key = stmt.name.lower()
-        entry = self.catalog.contexts.get(key)
+        entry = self.catalog.get_context(stmt.name)
         if entry is None:
             if stmt.if_exists:
                 return self._status_frame("drop_context", stmt.name)
             raise ValueError(f"Context '{stmt.name}' does not exist.")
 
+        key = entry.catalog_key
         dependents = self._transitive_dependents(key)
         if dependents and not stmt.cascade:
             names = ", ".join(sorted(dependents))
@@ -404,11 +512,30 @@ class ContextDDLExecutor:
         for dep_key in sorted(dependents):
             dep_entry = self.catalog.contexts.pop(dep_key, None)
             if dep_entry is not None:
-                self.adapter.unregister_context(dep_entry.name)
-                self._audit("drop_context", dep_entry.name, cascaded=True)
+                if hasattr(self.membership, "unregister_alias"):
+                    self.membership.unregister_alias(dep_entry.qualified_name)
+                if hasattr(self.history, "unregister_alias"):
+                    self.history.unregister_alias(dep_entry.qualified_name)
+                self.adapter.unregister_context(dep_entry.qualified_name)
+                self._audit(
+                    "drop_context",
+                    dep_entry.qualified_name,
+                    context_id=dep_entry.context_id,
+                    cascaded=True,
+                )
+                self.repository.drop_context(dep_entry)
         self.catalog.contexts.pop(key, None)
-        self.adapter.unregister_context(entry.name)
-        self._audit("drop_context", stmt.name)
+        if hasattr(self.membership, "unregister_alias"):
+            self.membership.unregister_alias(entry.qualified_name)
+        if hasattr(self.history, "unregister_alias"):
+            self.history.unregister_alias(entry.qualified_name)
+        self.adapter.unregister_context(entry.qualified_name)
+        self._audit(
+            "drop_context",
+            entry.qualified_name,
+            context_id=entry.context_id,
+        )
+        self.repository.drop_context(entry)
         return self._status_frame("drop_context", stmt.name)
 
     def _transitive_dependents(self, key: str) -> set:
@@ -419,7 +546,12 @@ class ContextDDLExecutor:
             for name, entry in self.catalog.contexts.items():
                 if name == key or name in dependents:
                     continue
-                deps = {d.lower() for d in entry.dependencies}
+                deps = {
+                    context_catalog_key(
+                        d, default_namespace=self.catalog.default_namespace
+                    )
+                    for d in entry.dependencies
+                }
                 if key in deps or (deps & dependents):
                     dependents.add(name)
                     changed = True
@@ -518,20 +650,25 @@ class ContextDDLExecutor:
                 )
         elif entry.composition is not None:
             for item in entry.composition.items:
-                if self.catalog.contexts.get(item.name.lower()) is None:
+                if self.catalog.get_context(item.name) is None:
                     raise ValueError(
                         f"Context '{stmt.name}' composition references "
                         f"undefined context '{item.name}'."
                     )
-        self.catalog.contexts[stmt.name.lower()] = replace(
+        updated_entry = replace(
             entry, last_validated_at=_now()
         )
+        self.catalog.contexts[entry.catalog_key] = updated_entry
+        self.repository.save_context(updated_entry)
         self._audit("validate_context", stmt.name)
         return self._status_frame("validate_context", stmt.name)
 
     def _refresh(self, stmt: RefreshContextModel) -> pd.DataFrame:
         if stmt.refresh_all:
-            names = [entry.name for entry in self.catalog.contexts.values()]
+            names = [
+                entry.qualified_name
+                for entry in self.catalog.contexts.values()
+            ]
         else:
             self._require(stmt.name or "")
             names = [stmt.name or ""]
@@ -560,23 +697,86 @@ class ContextDDLExecutor:
 
     def _refresh_one(self, name: str) -> None:
         entry = self._require(name)
+        lock = self._refresh_locks.setdefault(
+            entry.context_id, threading.Lock()
+        )
+        with lock:
+            self._refresh_one_locked(name)
+
+    def _refresh_one_locked(self, name: str) -> None:
+        entry = self._require(name)
         now = _now()
         if entry.materialization.materialized and entry.definition_sql:
-            snapshot = self._build_snapshot(entry, now)
-            self.catalog.contexts[name.lower()] = replace(
+            staged, history_events = self._build_snapshot(entry, now)
+            snapshot = staged.snapshot
+            updated_entry = replace(
                 entry,
                 last_refreshed_at=now,
                 data_as_of=now,
                 current_snapshot_version=snapshot.version,
+                last_refresh_error=None,
             )
+            try:
+                self.repository.promote_snapshot(
+                    updated_entry,
+                    snapshot,
+                    membership_payload=self.membership.serialize_staged(
+                        staged
+                    ),
+                    scores=staged.scores,
+                    history_events=history_events,
+                )
+            except Exception:
+                raise
+            self.membership.commit_snapshot(staged)
+            self.history.append(history_events)
+            self.catalog.contexts[entry.catalog_key] = updated_entry
+            retention = parse_duration_seconds(
+                entry.materialization.history_retention
+            )
+            if entry.materialization.history and retention is not None:
+                from datetime import timedelta
+                cutoff = now - timedelta(seconds=retention)
+                anchor = self.membership.prune_before(
+                    entry.context_id, cutoff
+                )
+                if anchor is not None:
+                    self.history.prune_before(
+                        entry.context_id, anchor.data_as_of
+                    )
+                    retained_entry = replace(
+                        updated_entry,
+                        history_available_from=anchor.data_as_of,
+                    )
+                    self.catalog.contexts[
+                        entry.catalog_key
+                    ] = retained_entry
+                    self.repository.prune_history(
+                        retained_entry, anchor.data_as_of
+                    )
+                    self.repository.save_context(retained_entry)
         else:
             if entry.definition_sql is not None:
                 # Force one evaluation so definition errors surface now.
-                self.adapter.resolve_context_df(entry.name)
-            self.catalog.contexts[name.lower()] = replace(
-                entry, last_refreshed_at=now
+                self.adapter.resolve_context_df(entry.qualified_name)
+            updated_entry = replace(
+                entry, last_refreshed_at=now, last_refresh_error=None
             )
+            self.catalog.contexts[entry.catalog_key] = updated_entry
+            self.repository.save_context(updated_entry)
         self._audit("refresh_context", name)
+
+    def record_refresh_failure(self, name: str, detail: str) -> None:
+        entry = self._require(name)
+        updated = replace(entry, last_refresh_error=detail)
+        self.catalog.contexts[entry.catalog_key] = updated
+        self.repository.save_context(updated)
+        self._audit(
+            "refresh_context_failed",
+            entry.qualified_name,
+            context_id=entry.context_id,
+            error=detail,
+        )
 
     def _build_snapshot(self, entry: ContextCatalogEntry, now: datetime):
         """Full refresh: evaluate, build, atomically promote (plan 7.3).
@@ -584,64 +784,151 @@ class ContextDDLExecutor:
         The store is only touched after successful evaluation, so a failing
         definition leaves the previous snapshot current (CS-7).
         """
-        df = self.adapter.resolve_context_df(entry.name)
         key_column = entry.entity_key_name
+        resolved_storage = self.membership.resolve_storage_kind(
+            entry.materialization.storage
+        )
+        if resolved_storage == "roaring":
+            from pyroaring import BitMap64
+            member_ids = BitMap64()
+        else:
+            member_ids = set()
+        scores: Dict[int, float] = {}
+        effective_times: Dict[int, datetime] = {}
+        score_column = entry.score_expression
+        watermark_column = entry.materialization.source_watermark
+        observed_values = []
+        definition_sql = (entry.definition_sql or "").rstrip(";")
         try:
-            member_ids = [int(v) for v in df[key_column]]
+            for batch in self.adapter.execute_batches(definition_sql):
+                self.last_refresh_max_batch_size = max(
+                    self.last_refresh_max_batch_size, len(batch)
+                )
+                if key_column not in batch.columns:
+                    raise ValueError(
+                        f"definition does not return entity key '{key_column}'"
+                    )
+                batch_ids = [int(value) for value in batch[key_column]]
+                if any(value < 0 for value in batch_ids):
+                    raise ValueError("entity IDs must be non-negative")
+                if resolved_storage == "roaring":
+                    member_ids |= BitMap64(batch_ids)
+                else:
+                    member_ids.update(batch_ids)
+                if (
+                    entry.has_score and score_column
+                    and score_column in batch.columns
+                ):
+                    scores.update(
+                        (int(key), float(value))
+                        for key, value in zip(
+                            batch[key_column], batch[score_column]
+                        )
+                    )
+                if entry.is_temporal and entry.temporal_column:
+                    if entry.temporal_column not in batch.columns:
+                        raise ValueError(
+                            f"TEMPORAL column '{entry.temporal_column}' "
+                            "is not returned by the definition"
+                        )
+                    from contextql.temporal import floor_utc
+
+                    temporal_values = []
+                    for raw_value in batch[entry.temporal_column]:
+                        timestamp = pd.Timestamp(raw_value)
+                        if (
+                            timestamp.tzinfo is None
+                            or timestamp.utcoffset() is None
+                        ):
+                            raise ValueError(
+                                "TEMPORAL values must include an explicit "
+                                "timezone"
+                            )
+                        temporal_values.append(
+                            floor_utc(
+                                timestamp.to_pydatetime(),
+                                entry.temporal_granularity,
+                            )
+                        )
+                    effective_times.update(
+                        (
+                            int(key),
+                            value,
+                        )
+                        for key, value in zip(
+                            batch[key_column], temporal_values
+                        )
+                    )
+                if watermark_column:
+                    if watermark_column not in batch.columns:
+                        raise ValueError(
+                            f"source_watermark column '{watermark_column}' "
+                            "is not returned by the definition"
+                        )
+                    non_null = batch[watermark_column].dropna()
+                    if not non_null.empty:
+                        observed_values.append(non_null.max())
         except (ValueError, TypeError) as exc:
             raise ValueError(
-                f"Context '{entry.name}' cannot be materialized: snapshot "
-                f"membership requires integer entity keys (CS-9); column "
-                f"'{key_column}' is not integer-valued."
+                f"Context '{entry.qualified_name}' cannot be materialized: "
+                f"{exc}."
             ) from exc
 
-        scores: Dict[int, float] = {}
-        score_column = entry.score_expression
-        if entry.has_score and score_column and score_column in df.columns:
-            scores = {
-                int(k): float(v)
-                for k, v in zip(df[key_column], df[score_column])
-            }
+        membership_key = entry.context_id or entry.qualified_name
+        previous = self.membership.get_snapshot(membership_key)
+        previous_members = set()
+        previous_scores: Dict[int, float] = {}
+        if entry.materialization.history and previous is not None:
+            previous_members = self.membership.membership_object(
+                membership_key, previous.version
+            )
+            previous_scores = self.membership.scores(
+                membership_key, previous.version
+            )
 
-        previous = self.membership.get_snapshot(entry.name)
-        previous_members = (
-            self.membership.members(entry.name) if previous else set()
+        observed_watermark = (
+            previous.source_watermark if previous is not None else None
         )
-        previous_scores = (
-            self.membership.scores(entry.name) if previous else {}
-        )
+        if watermark_column:
+            if observed_values:
+                value = max(observed_values)
+                observed_watermark = (
+                    value.isoformat() if hasattr(value, "isoformat")
+                    else str(value)
+                )
 
-        snapshot = self.membership.put_snapshot(
-            entry.name,
+        staged = self.membership.stage_snapshot(
+            membership_key,
             member_ids,
             computed_at=now,
             data_as_of=now,
             definition_hash=entry.definition_hash,
-            source_watermark=entry.materialization.source_watermark,
+            source_watermark=observed_watermark,
             scores=scores,
+            storage_kind=resolved_storage,
         )
 
+        history_events = []
         if entry.materialization.history:
-            self.history.append(
-                derive_changes(
-                    context_id=entry.name,
-                    context_version=snapshot.version,
-                    recorded_at=now,
-                    effective_at=now,
-                    previous_members=previous_members,
-                    new_members=set(member_ids),
-                    previous_scores=previous_scores,
-                    new_scores=scores,
-                )
+            history_events = derive_changes(
+                context_id=membership_key,
+                context_version=staged.snapshot.version,
+                recorded_at=now,
+                effective_at=now,
+                previous_members=previous_members,
+                new_members=staged.membership,
+                previous_scores=previous_scores,
+                new_scores=scores,
+                effective_times=effective_times,
             )
-        return snapshot
+        return staged, history_events
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
     def _require(self, name: str) -> ContextCatalogEntry:
-        entry = self.catalog.contexts.get(name.lower())
+        entry = self.catalog.get_context(name)
         if entry is None:
             raise ValueError(f"Context '{name}' does not exist.")
         return entry
