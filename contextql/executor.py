@@ -828,13 +828,22 @@ class ContextQLExecutor:
                     self._trace.provider_calls.append(ProviderCall(
                         provider_name=ref.name,
                         provider_type="MCP",
-                        entity_count=len(mcp_result.entity_ids),
+                        entity_count=(
+                            len(mcp_result.entity_ids)
+                            if mcp_result.entity_ids is not None
+                            else len(mcp_result.membership_array())
+                        ),
                         elapsed_ms=_mcp_elapsed,
                         data_as_of=getattr(mcp_result, 'data_as_of', None),
                     ))
 
             mcp_result = self._mcp_result_cache[cache_key]
-            entity_ids = set(mcp_result.entity_ids)
+            # ID-list results become sets; bitmap results stay as NumPy
+            # arrays — never expanded into Python objects (plan 8.2).
+            if mcp_result.entity_ids is not None:
+                entity_ids = set(mcp_result.entity_ids)
+            else:
+                entity_ids = mcp_result.membership_array()
             key_col = self._resolve_mcp_key_column(df, query, pred, ref.name)
             # Record context in trace
             _mcp_label = f"MCP({ref.name})"
@@ -949,7 +958,7 @@ class ContextQLExecutor:
                     _ck = (ref.name, _et, frozenset(_params.items()))
                     mcp_result = self._mcp_result_cache.get(_ck)
                     if mcp_result is not None and mcp_result.scores is not None:
-                        score_map = dict(zip(mcp_result.entity_ids, mcp_result.scores))
+                        score_map = mcp_result.score_map()
                         key_col = self._resolve_mcp_key_column(df, query, pred, ref.name)
                         score_values = df[key_col].map(score_map).fillna(0.0)
                     else:

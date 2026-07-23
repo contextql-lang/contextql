@@ -29,25 +29,113 @@ Example usage::
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
+
+#: Refuse to decode serialized membership payloads larger than this
+#: (64 MiB) — a Roaring bitmap of tens of millions of IDs is far smaller.
+MAX_BITMAP_PAYLOAD_BYTES = 64 * 1024 * 1024
 
 
 @dataclass
 class MCPResult:
     """Result returned by an :class:`MCPProvider`.
 
+    Membership arrives either as an explicit ID list (small results) or as a
+    serialized portable bitmap (large results) — exactly one of
+    ``entity_ids`` / ``membership_bitmap`` must be provided (plan 8.2).
+
     Attributes:
         entity_type: The entity type this result applies to (e.g. ``"invoices"``).
             Must match the entity type the executor expects for the query.
         entity_ids: Ordered list of entity IDs that belong to this context.
-        scores: Optional per-entity relevance scores, parallel to *entity_ids*.
-            If ``None``, all members receive a score of 1.0 in scoring calculations.
+            ``None`` when membership is supplied as a bitmap.
+        scores: Optional per-entity relevance scores. A list parallel to
+            *entity_ids*, or a mapping ``{entity_id: score}`` (required form
+            for bitmap results). If ``None``, members score 1.0.
+        membership_bitmap: Serialized bitmap payload for large results.
+        bitmap_encoding: Encoding of *membership_bitmap*; ``"roaring64"``
+            (pyroaring ``BitMap64.serialize``) is the supported encoding.
+        entity_key_type: Declared entity key type (e.g. ``"INT64"``).
+        data_as_of: Source-side freshness timestamp (ISO string).
+        source_watermark: Cursor/watermark for incremental synchronization.
+        evidence_refs: Optional evidence references keyed by entity ID.
+        next_cursor: Pagination cursor; ``None`` when the result is complete.
     """
 
     entity_type: str
-    entity_ids: list[Any]
-    scores: list[float] | None = None
+    entity_ids: list[Any] | None = None
+    scores: list[float] | dict[int, float] | None = None
+    membership_bitmap: bytes | None = None
+    bitmap_encoding: str | None = None
+    entity_key_type: str | None = None
+    data_as_of: str | None = None
+    source_watermark: str | None = None
+    evidence_refs: dict[int, str] | None = None
+    next_cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        has_ids = self.entity_ids is not None
+        has_bitmap = self.membership_bitmap is not None
+        if has_ids == has_bitmap:
+            raise ValueError(
+                "MCPResult requires exactly one of entity_ids or "
+                "membership_bitmap."
+            )
+        if has_bitmap and self.bitmap_encoding is None:
+            raise ValueError(
+                "MCPResult with membership_bitmap requires bitmap_encoding."
+            )
+
+    def membership_array(self):
+        """Membership as a NumPy-compatible array without building a
+        Python list (plan 8.2: bitmaps are never expanded in the executor).
+        """
+        import numpy as np
+
+        if self.entity_ids is not None:
+            return np.asarray(self.entity_ids)
+        payload = self.membership_bitmap or b""
+        if len(payload) > MAX_BITMAP_PAYLOAD_BYTES:
+            raise ValueError(
+                f"Membership bitmap payload of {len(payload)} bytes exceeds "
+                f"the {MAX_BITMAP_PAYLOAD_BYTES}-byte limit."
+            )
+        if self.bitmap_encoding != "roaring64":
+            raise ValueError(
+                f"Unsupported bitmap encoding {self.bitmap_encoding!r}; "
+                "expected 'roaring64'."
+            )
+        try:
+            from pyroaring import BitMap64
+        except ImportError as exc:
+            raise ImportError(
+                "Decoding bitmap MCP results requires the 'pyroaring' "
+                "package; install with: pip install 'contextql[roaring]'"
+            ) from exc
+        try:
+            bitmap = BitMap64.deserialize(payload)
+        except Exception as exc:
+            raise ValueError(
+                f"Malformed membership bitmap payload: {exc}"
+            ) from exc
+        return np.asarray(bitmap.to_array(), dtype="int64")
+
+    def score_map(self) -> dict[int, float]:
+        """Scores as an ``{entity_id: score}`` mapping."""
+        if self.scores is None:
+            return {}
+        if isinstance(self.scores, dict):
+            return {int(k): float(v) for k, v in self.scores.items()}
+        if self.entity_ids is None:
+            raise ValueError(
+                "Parallel-list scores require entity_ids; bitmap results "
+                "must supply scores as a mapping."
+            )
+        return {
+            int(entity_id): float(score)
+            for entity_id, score in zip(self.entity_ids, self.scores)
+        }
 
 
 @dataclass
@@ -57,9 +145,17 @@ class RemoteResult:
     Attributes:
         rows: Fetched rows as a list of dicts (column → value).
             A pandas DataFrame or PyArrow Table may also be supplied.
+        schema: Optional column → type mapping describing *rows*.
+        data_as_of: Source-side freshness timestamp (ISO string).
+        source_watermark: Cursor/watermark for incremental synchronization.
+        next_cursor: Pagination cursor; ``None`` when the result is complete.
     """
 
     rows: list[dict] | Any  # list[dict] canonical; DataFrame/Arrow also accepted
+    schema: dict[str, str] | None = None
+    data_as_of: str | None = None
+    source_watermark: str | None = None
+    next_cursor: str | None = None
 
     def to_dataframe(self) -> "pd.DataFrame":
         """Coerce *rows* to a pandas DataFrame regardless of input type."""
