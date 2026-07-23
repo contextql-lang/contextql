@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Protocol, Sequence
 
 from lark import Token, Tree
 
+from .context_options import validate_context_options
 from .errors import Severity
 from .parser import ContextQLParser
 
@@ -44,6 +45,12 @@ class EntityKeyType(str, Enum):
 class StatementKind:
     SELECT = "SELECT"
     CREATE_CONTEXT = "CREATE_CONTEXT"
+    ALTER_CONTEXT = "ALTER_CONTEXT"
+    DROP_CONTEXT = "DROP_CONTEXT"
+    SHOW_CONTEXTS = "SHOW_CONTEXTS"
+    DESCRIBE_CONTEXT = "DESCRIBE_CONTEXT"
+    REFRESH_CONTEXT = "REFRESH_CONTEXT"
+    VALIDATE_CONTEXT = "VALIDATE_CONTEXT"
     CREATE_EVENT_LOG = "CREATE_EVENT_LOG"
     CREATE_PROCESS_MODEL = "CREATE_PROCESS_MODEL"
     UNKNOWN = "UNKNOWN"
@@ -183,6 +190,9 @@ class ContextDefinitionModel(SemanticStatement):
     dependencies: List[str] = field(default_factory=list)
     options: Dict[str, Any] = field(default_factory=dict)
 
+    or_replace: bool = False
+    duplicate_options: List[str] = field(default_factory=list)
+
     @property
     def composition_strategy(self) -> Optional[str]:
         return self.composition.strategy if self.composition else None
@@ -217,6 +227,54 @@ class ContextDefinitionModel(SemanticStatement):
             sort_keys=True,
         )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+@dataclass
+class AlterContextModel(SemanticStatement):
+    """ALTER CONTEXT <name> <action>."""
+    name: str = ""
+    action: str = ""  # rename_to | set_definition | set_score | drop_score
+    #                 # | set_description | set_tags | set_state
+    new_name: Optional[str] = None
+    definition_sql: Optional[str] = None
+    score_expression: Optional[str] = None
+    description: Optional[str] = None
+    tags: List[str] = field(default_factory=list)
+    state: Optional[str] = None
+
+
+@dataclass
+class DropContextModel(SemanticStatement):
+    """DROP CONTEXT [IF EXISTS] <name> [CASCADE | RESTRICT]."""
+    name: str = ""
+    if_exists: bool = False
+    cascade: bool = False  # default mode is RESTRICT (SPEC section 8)
+
+
+@dataclass
+class ShowContextsModel(SemanticStatement):
+    """SHOW CONTEXTS [LIKE 'pattern']."""
+    like_pattern: Optional[str] = None
+
+
+@dataclass
+class DescribeContextModel(SemanticStatement):
+    """DESCRIBE CONTEXT <name>."""
+    name: str = ""
+
+
+@dataclass
+class RefreshContextModel(SemanticStatement):
+    """REFRESH CONTEXT <name> | REFRESH ALL CONTEXTS."""
+    name: Optional[str] = None
+    refresh_all: bool = False
+    parameters: List[ParameterBinding] = field(default_factory=list)
+
+
+@dataclass
+class ValidateContextModel(SemanticStatement):
+    """VALIDATE CONTEXT <name>."""
+    name: str = ""
 
 
 @dataclass
@@ -262,6 +320,12 @@ class ContextCatalogEntry:
     last_validated_at: Optional[datetime] = None
     last_refreshed_at: Optional[datetime] = None
     data_as_of: Optional[datetime] = None
+    # Descriptive/definition fields used by DESCRIBE CONTEXT and ALTER
+    description: Optional[str] = None
+    tags: List[str] = field(default_factory=list)
+    definition_sql: Optional[str] = None
+    composition: Optional[ContextComposition] = None
+    score_expression: Optional[str] = None
 
 
 @dataclass
@@ -385,6 +449,12 @@ class SemanticLowerer:
         lowerers = {
             "select_stmt": self._lower_select,
             "create_context_stmt": self._lower_create_context,
+            "alter_context_stmt": self._lower_alter_context,
+            "drop_context_stmt": self._lower_drop_context,
+            "show_contexts_stmt": self._lower_show_contexts,
+            "describe_context_stmt": self._lower_describe_context,
+            "refresh_context_stmt": self._lower_refresh_context,
+            "validate_context_stmt": self._lower_validate_context,
             "create_event_log_stmt": self._lower_create_event_log,
             "create_process_model_stmt": self._lower_create_process_model,
         }
@@ -697,6 +767,11 @@ class SemanticLowerer:
             raw_sql=self._tree_text(node),
         )
 
+        # OR REPLACE flag
+        model.or_replace = any(
+            isinstance(t, Token) and t.type == "REPLACE" for t in node.children
+        )
+
         # Name: first qualified_name child; a dotted prefix is the namespace
         for child in node.children:
             if isinstance(child, Tree) and child.data == "qualified_name":
@@ -760,12 +835,17 @@ class SemanticLowerer:
             if text:
                 model.classification = text
 
-        # WITH options: names are case-insensitive (SPEC section 6 / CS-13)
+        # WITH options: names are case-insensitive (SPEC section 6 / CS-13);
+        # duplicates are recorded for E151 rather than last-writer-wins
         for sub in self._iter_subtrees(node, "context_with_options"):
             for opt in self._iter_subtrees(sub, "context_option"):
                 name, value = self._lower_context_option(opt)
-                if name:
-                    model.options[name] = value
+                if not name:
+                    continue
+                if name in model.options:
+                    model.duplicate_options.append(name)
+                    continue
+                model.options[name] = value
 
         # Definition body: AS select_stmt or AS compose_clause
         for child in node.children:
@@ -795,6 +875,111 @@ class SemanticLowerer:
                 ):
                     model.dependencies.append(item.name)
 
+        return model
+
+    def _lower_alter_context(self, node: Tree) -> AlterContextModel:
+        model = AlterContextModel(
+            kind=StatementKind.ALTER_CONTEXT,
+            raw_sql=self._tree_text(node),
+        )
+        for child in node.children:
+            if isinstance(child, Tree) and child.data == "qualified_name":
+                model.name = self._qualified_name_text(child)
+                break
+        for action in self._iter_subtrees(node, "alter_context_action"):
+            token_types = [
+                t.type for t in action.children if isinstance(t, Token)
+            ]
+            if "RENAME" in token_types:
+                model.action = "rename_to"
+                for child in action.children:
+                    if isinstance(child, Tree) and child.data == "qualified_name":
+                        model.new_name = self._qualified_name_text(child)
+            elif "DEFINITION" in token_types:
+                model.action = "set_definition"
+                for child in action.children:
+                    if isinstance(child, Tree) and child.data == "select_stmt":
+                        model.definition_sql = self._tree_text(child)
+            elif "SCORE" in token_types and "DROP" in token_types:
+                model.action = "drop_score"
+            elif "SCORE" in token_types:
+                model.action = "set_score"
+                for child in action.children:
+                    if isinstance(child, Tree):
+                        model.score_expression = self._tree_text(child)
+            elif "DESCRIPTION" in token_types:
+                model.action = "set_description"
+                for child in action.children:
+                    if isinstance(child, Tree) and child.data == "string_literal":
+                        model.description = self._string_value(child)
+            elif "TAGS" in token_types:
+                model.action = "set_tags"
+                for child in action.children:
+                    if isinstance(child, Tree) and child.data == "string_literal":
+                        model.tags.append(self._string_value(child))
+            elif "STATE" in token_types:
+                model.action = "set_state"
+                for child in action.children:
+                    if isinstance(child, Tree) and child.data == "string_literal":
+                        model.state = self._string_value(child)
+        return model
+
+    def _lower_drop_context(self, node: Tree) -> DropContextModel:
+        model = DropContextModel(
+            kind=StatementKind.DROP_CONTEXT,
+            raw_sql=self._tree_text(node),
+        )
+        token_types = [t.type for t in node.children if isinstance(t, Token)]
+        model.if_exists = "IF" in token_types and "EXISTS" in token_types
+        model.cascade = "CASCADE" in token_types
+        for child in node.children:
+            if isinstance(child, Tree) and child.data == "qualified_name":
+                model.name = self._qualified_name_text(child)
+        return model
+
+    def _lower_show_contexts(self, node: Tree) -> ShowContextsModel:
+        model = ShowContextsModel(
+            kind=StatementKind.SHOW_CONTEXTS,
+            raw_sql=self._tree_text(node),
+        )
+        for child in node.children:
+            if isinstance(child, Tree) and child.data == "string_literal":
+                model.like_pattern = self._string_value(child)
+        return model
+
+    def _lower_describe_context(self, node: Tree) -> DescribeContextModel:
+        model = DescribeContextModel(
+            kind=StatementKind.DESCRIBE_CONTEXT,
+            raw_sql=self._tree_text(node),
+        )
+        for child in node.children:
+            if isinstance(child, Tree) and child.data == "qualified_name":
+                model.name = self._qualified_name_text(child)
+        return model
+
+    def _lower_refresh_context(self, node: Tree) -> RefreshContextModel:
+        model = RefreshContextModel(
+            kind=StatementKind.REFRESH_CONTEXT,
+            raw_sql=self._tree_text(node),
+        )
+        token_types = [t.type for t in node.children if isinstance(t, Token)]
+        model.refresh_all = "ALL" in token_types
+        for child in node.children:
+            if isinstance(child, Tree) and child.data == "qualified_name":
+                model.name = self._qualified_name_text(child)
+        for arg in self._iter_subtrees(node, "named_arg"):
+            name, value = self._lower_named_arg(arg)
+            model.parameters.append(ParameterBinding(name=name, value=value))
+        return model
+
+    def _lower_validate_context(self, node: Tree) -> ValidateContextModel:
+        model = ValidateContextModel(
+            kind=StatementKind.VALIDATE_CONTEXT,
+            raw_sql=self._tree_text(node),
+        )
+        for child in node.children:
+            if isinstance(child, Tree) and child.data == "qualified_name":
+                model.name = self._qualified_name_text(child)
         return model
 
     def _lower_param_def(self, node: Tree) -> Optional[ContextParameter]:
@@ -1126,6 +1311,7 @@ class SemanticAnalyzer:
                 message=f"CREATE CONTEXT '{ctx.name}' is missing an ON entity key declaration.",
                 hint="Add ON <entity_key_column> to the context definition.",
             ))
+        diags.extend(validate_context_options(ctx))
         return diags
 
     def _check_event_log_definition(self, log: EventLogDefinitionModel) -> List[SemanticDiagnostic]:

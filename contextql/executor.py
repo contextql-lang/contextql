@@ -8,14 +8,32 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
 from contextql.adapters.duckdb_adapter import DuckDBAdapter
+from contextql.context_ddl import ContextDDLExecutor
 from contextql.semantic import (
+    AlterContextModel,
     AnalysisResult,
+    ContextDefinitionModel,
     ContextPredicate,
     ContextReference,
+    DescribeContextModel,
+    DropContextModel,
     InMemoryCatalog,
     QueryModel,
+    RefreshContextModel,
+    ShowContextsModel,
     TableRef,
+    ValidateContextModel,
     analyze_sql,
+)
+
+DDL_STATEMENT_TYPES = (
+    ContextDefinitionModel,
+    AlterContextModel,
+    DropContextModel,
+    ShowContextsModel,
+    DescribeContextModel,
+    RefreshContextModel,
+    ValidateContextModel,
 )
 
 
@@ -85,6 +103,9 @@ class ContextQLExecutor:
         self._remote_timeout_ms = remote_timeout_ms
         self._mcp_timeout_behavior = mcp_timeout_behavior
         self._mcp_result_cache: Dict = {}
+        self.ddl = ContextDDLExecutor(catalog=catalog, adapter=adapter)
+        self.membership = self.ddl.membership
+        self.history = self.ddl.history
 
     # ---------------------------------------------------------
     # Public API
@@ -100,8 +121,18 @@ class ContextQLExecutor:
             raise ValueError("No statements found.")
 
         stmt = analysis.statements[0]
+        if isinstance(stmt, DDL_STATEMENT_TYPES):
+            df = self.ddl.execute(stmt)
+            return ExecutionResult(
+                dataframe=df,
+                generated_sql="",
+                analysis=analysis,
+                trace=None,
+            )
         if not isinstance(stmt, QueryModel):
-            raise ValueError("Executor currently supports SELECT queries only.")
+            raise ValueError(
+                "Executor supports SELECT queries and context DDL statements."
+            )
 
         df, generated_sql = self._execute_query(stmt)
 

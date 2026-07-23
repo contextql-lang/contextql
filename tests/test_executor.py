@@ -335,10 +335,18 @@ class TestExecutorErrors:
                 "SELECT * FROM invoices WHERE CONTEXT IN (nonexistent_ctx);"
             )
 
-    def test_ddl_statement_raises(self, executor):
-        with pytest.raises(ValueError, match="SELECT queries only"):
+    def test_context_ddl_executes(self, executor):
+        result = executor.execute_sql(
+            "CREATE CONTEXT open_ctx ON invoice_id "
+            "AS SELECT invoice_id FROM invoices WHERE status = 'open';"
+        )
+        assert result.dataframe.iloc[0]["status"] == "ok"
+
+    def test_unsupported_statement_raises(self, executor):
+        with pytest.raises(ValueError, match="supports SELECT"):
             executor.execute_sql(
-                "CREATE CONTEXT x ON id AS SELECT id FROM t;"
+                "CREATE EVENT LOG lg FROM invoices ON case_id "
+                "ACTIVITY act TIMESTAMP ts;"
             )
 
     def test_analysis_result_attached(self, executor):

@@ -96,7 +96,49 @@ E140 = ErrorCode("E140", Severity.ERROR, "PROCESS_MODEL_NO_PATHS",
 E141 = ErrorCode("E141", Severity.ERROR, "UNDEFINED_EVENT_LOG",
                  "undefined event log {log!r} in CREATE PROCESS MODEL {name!r}")
 
+# ── Context option errors (E150-E159, SPEC section 6 & 8) ───────────────
+
+E150 = ErrorCode("E150", Severity.ERROR, "UNKNOWN_CONTEXT_OPTION",
+                 "unknown context option {name!r}")
+E151 = ErrorCode("E151", Severity.ERROR, "DUPLICATE_CONTEXT_OPTION",
+                 "context option {name!r} specified more than once")
+E152 = ErrorCode("E152", Severity.ERROR, "INVALID_DURATION",
+                 "invalid duration {value!r} for option {name!r}; expected "
+                 "'<positive integer> <second|minute|hour|day>[s]'")
+E153 = ErrorCode("E153", Severity.ERROR, "INTERVAL_WITHOUT_SCHEDULE",
+                 "refresh_interval requires refresh_mode = 'scheduled'")
+E154 = ErrorCode("E154", Severity.ERROR, "INCREMENTAL_WITHOUT_WATERMARK",
+                 "refresh_mode = 'incremental' requires source_watermark")
+E155 = ErrorCode("E155", Severity.ERROR, "RETENTION_WITHOUT_HISTORY",
+                 "history_retention requires history = TRUE")
+E156 = ErrorCode("E156", Severity.ERROR, "REFRESH_WITHOUT_MATERIALIZATION",
+                 "refresh_mode {mode!r} requires materialized = TRUE")
+E157 = ErrorCode("E157", Severity.ERROR, "ROARING_REQUIRES_INTEGER_KEY",
+                 "storage = 'roaring' requires an integer entity key; "
+                 "{key!r} is {key_type}")
+E158 = ErrorCode("E158", Severity.ERROR, "STALE_BEFORE_REFRESH",
+                 "stale_after must not be less than refresh_interval")
+E159 = ErrorCode("E159", Severity.ERROR, "DROP_RESTRICT_DEPENDENTS",
+                 "cannot drop context {name!r}: depended on by {dependents}; "
+                 "use DROP CONTEXT ... CASCADE to drop dependents")
+E160 = ErrorCode("E160", Severity.ERROR, "INVALID_OPTION_VALUE",
+                 "invalid value {value!r} for context option {name!r}; "
+                 "expected {expected}")
+
+# ── Runtime errors (E200-E299) ──────────────────────────────────────────
+
+E200 = ErrorCode("E200", Severity.ERROR, "SNAPSHOT_MISSING",
+                 "context {name!r} is materialized but has no current "
+                 "snapshot; run REFRESH CONTEXT {name}")
+
 # ── Semantic warnings (W100-W199) ───────────────────────────────────────
+
+W100 = ErrorCode("W100", Severity.WARNING, "SNAPSHOT_STALE",
+                 "context {name!r} snapshot is stale (age {age}, "
+                 "stale_after {threshold})")
+W101 = ErrorCode("W101", Severity.WARNING, "REFRESH_FAILED",
+                 "context {name!r} last refresh failed; serving last good "
+                 "snapshot (version {version}): {detail}")
 
 W001 = ErrorCode("W001", Severity.WARNING, "WINDOW_WITHOUT_SCORE",
                  "CONTEXT WINDOW applied to contexts with no scores; "
