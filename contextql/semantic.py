@@ -15,9 +15,12 @@ This module handles structured lowering and deeper semantic checks (E120, E130+)
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional, Protocol, Sequence
+from typing import Any, Dict, List, Optional, Protocol, Sequence
 
 from lark import Token, Tree
 
@@ -124,16 +127,96 @@ class QueryModel(SemanticStatement):
     having: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class ContextParameter:
+    """A declared context parameter with an optional typed default."""
+    name: str
+    type_name: str
+    default: Optional[Any] = None
+
+
+@dataclass(frozen=True)
+class ContextCompositionItem:
+    """One member of a COMPOSE body, with an optional weight."""
+    name: str
+    weight: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class ContextComposition:
+    """A COMPOSE (...) WITH STRATEGY body."""
+    items: tuple[ContextCompositionItem, ...] = ()
+    strategy: str = "UNION"
+
+
+@dataclass(frozen=True)
+class MaterializationSettings:
+    """Materialization/storage settings resolved from WITH options.
+
+    Defaults follow SPEC.md section 6 (Options).
+    """
+    materialized: bool = False
+    storage: str = "auto"
+    refresh_mode: str = "manual"
+    refresh_interval: Optional[str] = None
+    stale_after: Optional[str] = None
+    history: bool = False
+    history_retention: Optional[str] = None
+    source_watermark: Optional[str] = None
+
+
 @dataclass
 class ContextDefinitionModel(SemanticStatement):
     name: str = ""
+    namespace: Optional[str] = None
+    parameters: List[ContextParameter] = field(default_factory=list)
     entity_key_name: Optional[str] = None
+    entity_key_type: Optional[str] = None
+    definition_sql: Optional[str] = None
+    composition: Optional[ContextComposition] = None
     score_expression: Optional[str] = None
     temporal_column: Optional[str] = None
     temporal_granularity: Optional[str] = None
     description: Optional[str] = None
     tags: List[str] = field(default_factory=list)
+    classification: Optional[str] = None
     dependencies: List[str] = field(default_factory=list)
+    options: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def composition_strategy(self) -> Optional[str]:
+        return self.composition.strategy if self.composition else None
+
+    def definition_hash(self) -> str:
+        """Stable hash of the semantic definition (SPEC section 7).
+
+        Covers every field that changes membership or scoring semantics;
+        excludes presentation metadata (description, tags).
+        """
+        canonical = json.dumps(
+            {
+                "name": self.name.lower(),
+                "namespace": (self.namespace or "").lower(),
+                "parameters": [
+                    (p.name, p.type_name, repr(p.default)) for p in self.parameters
+                ],
+                "entity_key_name": self.entity_key_name,
+                "definition_sql": self.definition_sql,
+                "composition": (
+                    [(i.name, i.weight) for i in self.composition.items]
+                    + [self.composition.strategy]
+                    if self.composition
+                    else None
+                ),
+                "score_expression": self.score_expression,
+                "temporal": [self.temporal_column, self.temporal_granularity],
+                "options": sorted(
+                    (k, repr(v)) for k, v in self.options.items()
+                ),
+            },
+            sort_keys=True,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -166,6 +249,19 @@ class ContextCatalogEntry:
     is_temporal: bool = False
     has_score: bool = False
     dependencies: List[str] = field(default_factory=list)
+    # Plan section 6.2 metadata
+    context_id: Optional[str] = None
+    namespace: Optional[str] = None
+    version: int = 1
+    definition_hash: Optional[str] = None
+    lifecycle_state: str = "draft"
+    materialization: MaterializationSettings = field(
+        default_factory=MaterializationSettings
+    )
+    current_snapshot_version: Optional[int] = None
+    last_validated_at: Optional[datetime] = None
+    last_refreshed_at: Optional[datetime] = None
+    data_as_of: Optional[datetime] = None
 
 
 @dataclass
@@ -601,11 +697,22 @@ class SemanticLowerer:
             raw_sql=self._tree_text(node),
         )
 
-        # Name: first qualified_name child
+        # Name: first qualified_name child; a dotted prefix is the namespace
         for child in node.children:
             if isinstance(child, Tree) and child.data == "qualified_name":
-                model.name = self._qualified_name_text(child)
+                full_name = self._qualified_name_text(child)
+                if "." in full_name:
+                    model.namespace, model.name = full_name.rsplit(".", 1)
+                else:
+                    model.name = full_name
                 break
+
+        # Parameters
+        for sub in self._iter_subtrees(node, "context_params"):
+            for pdef in self._iter_subtrees(sub, "param_def"):
+                param = self._lower_param_def(pdef)
+                if param is not None:
+                    model.parameters.append(param)
 
         # ON entity key: identifier after ON token
         found_on = False
@@ -647,7 +754,30 @@ class SemanticLowerer:
                 if isinstance(child, Tree) and child.data == "string_literal":
                     model.tags.append(self._string_value(child))
 
+        # CLASSIFICATION
+        for sub in self._iter_subtrees(node, "classification_clause"):
+            text = self._identifier_text(sub)
+            if text:
+                model.classification = text
+
+        # WITH options: names are case-insensitive (SPEC section 6 / CS-13)
+        for sub in self._iter_subtrees(node, "context_with_options"):
+            for opt in self._iter_subtrees(sub, "context_option"):
+                name, value = self._lower_context_option(opt)
+                if name:
+                    model.options[name] = value
+
+        # Definition body: AS select_stmt or AS compose_clause
+        for child in node.children:
+            if isinstance(child, Tree) and child.data == "select_stmt":
+                model.definition_sql = self._tree_text(child)
+            elif isinstance(child, Tree) and child.data == "compose_clause":
+                model.composition = self._lower_compose_clause(child)
+
         # Dependencies: context references in the body
+        own_names = {model.name.lower()}
+        if model.namespace:
+            own_names.add(f"{model.namespace}.{model.name}".lower())
         for inv in self._iter_subtrees(node, "context_invocation"):
             # Skip the context's own name
             if not inv.children:
@@ -655,10 +785,107 @@ class SemanticLowerer:
             first = inv.children[0]
             if isinstance(first, Tree) and first.data == "qualified_name":
                 ref_name = self._qualified_name_text(first)
-                if ref_name.lower() != model.name.lower():
+                if ref_name.lower() not in own_names:
                     model.dependencies.append(ref_name)
+        if model.composition:
+            for item in model.composition.items:
+                if (
+                    item.name.lower() not in own_names
+                    and item.name not in model.dependencies
+                ):
+                    model.dependencies.append(item.name)
 
         return model
+
+    def _lower_param_def(self, node: Tree) -> Optional[ContextParameter]:
+        """Lower ``identifier type_name (DEFAULT literal)?``."""
+        name: Optional[str] = None
+        type_name: Optional[str] = None
+        default: Optional[Any] = None
+        for child in node.children:
+            if isinstance(child, Tree) and child.data == "identifier" and name is None:
+                name = self._identifier_text_direct(child)
+            elif isinstance(child, Tree) and child.data == "type_name":
+                type_name = self._tree_text(child).replace(" ", "")
+            elif isinstance(child, Tree) and child.data == "literal":
+                default = self._literal_value(child)
+        if name is None or type_name is None:
+            return None
+        return ContextParameter(name=name, type_name=type_name, default=default)
+
+    def _lower_context_option(self, node: Tree) -> tuple[str, Any]:
+        """Lower ``identifier EQ expr`` to a (lowercased name, value) pair."""
+        name = ""
+        value: Any = None
+        seen_name = False
+        for child in node.children:
+            if (
+                isinstance(child, Tree)
+                and child.data == "identifier"
+                and not seen_name
+            ):
+                name = self._identifier_text_direct(child).lower()
+                seen_name = True
+            elif isinstance(child, Tree):
+                value = self._option_value(child)
+        return name, value
+
+    def _option_value(self, node: Tree) -> Any:
+        """Lower an option value expression to a Python-native value.
+
+        Single literals and identifiers become native values; anything more
+        complex is retained as raw expression text.
+        """
+        tokens = [t for t in node.scan_values(lambda v: isinstance(v, Token))]
+        if len(tokens) == 1:
+            return self._token_value(tokens[0])
+        return self._tree_text(node)
+
+    def _literal_value(self, node: Tree) -> Any:
+        """Lower a literal node to a Python-native value."""
+        tokens = [t for t in node.scan_values(lambda v: isinstance(v, Token))]
+        if len(tokens) == 1:
+            return self._token_value(tokens[0])
+        return self._tree_text(node)
+
+    def _token_value(self, tok: Token) -> Any:
+        if tok.type == "TRUE":
+            return True
+        if tok.type == "FALSE":
+            return False
+        if tok.type == "NULL":
+            return None
+        if tok.type == "STRING":
+            raw = tok.value
+            if raw.startswith("'") and raw.endswith("'"):
+                return raw[1:-1].replace("''", "'")
+            return raw
+        if tok.type == "INT":
+            return int(tok.value)
+        if tok.type == "NUMBER":
+            return float(tok.value)
+        if tok.type in ("IDENTIFIER", "QUOTED_IDENTIFIER"):
+            return tok.value.strip('"')
+        return tok.value
+
+    def _lower_compose_clause(self, node: Tree) -> ContextComposition:
+        items: List[ContextCompositionItem] = []
+        for item_node in self._iter_subtrees(node, "compose_item"):
+            name: Optional[str] = None
+            weight: Optional[float] = None
+            for child in item_node.children:
+                if isinstance(child, Tree) and child.data == "qualified_name":
+                    name = self._qualified_name_text(child)
+                elif isinstance(child, Tree) and child.data == "weight_clause":
+                    weight = self._extract_weight(child)
+            if name:
+                items.append(ContextCompositionItem(name=name, weight=weight))
+        strategy = "UNION"
+        for strat_node in self._iter_subtrees(node, "compose_strategy"):
+            for tok in strat_node.children:
+                if isinstance(tok, Token):
+                    strategy = tok.value.upper()
+        return ContextComposition(items=tuple(items), strategy=strategy)
 
     # ── CREATE EVENT LOG ────────────────────────────────────
 
