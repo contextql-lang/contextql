@@ -451,7 +451,7 @@ def run(rows: int, db_path: str) -> dict:
             *,
             entity_filter=None,
         ):
-            self.requested = set(int(value) for value in entity_filter.ids())
+            self.requested = entity_filter.ids()
             self.columns = set(columns)
             return RemoteResult(
                 rows=[
@@ -480,7 +480,7 @@ def run(rows: int, db_path: str) -> dict:
     evidence_ids = set(
         int(value) for value in evidence.to_pandas()["transaction_id"]
     )
-    if evidence_provider.requested != composed_reference:
+    if set(evidence_provider.requested) != composed_reference:
         raise SystemExit(
             "CORRECTNESS FAILURE: REMOTE request did not receive the exact "
             "composed membership."

@@ -47,6 +47,26 @@ class MembershipHistoryStore:
 
     def append(self, events: Iterable[MembershipChange]) -> None:
         self._events.extend(events)
+        self._events.sort(key=self._event_sort_key)
+
+    @staticmethod
+    def _event_sort_key(event: MembershipChange):
+        return (
+            event.effective_at,
+            event.recorded_at,
+            event.context_version,
+            event.entity_id,
+            event.change_type,
+        )
+
+    @staticmethod
+    def _mutable_membership(values):
+        """Copy membership while preserving a native Roaring representation."""
+        if type(values).__module__.startswith("pyroaring"):
+            from pyroaring import BitMap64
+
+            return BitMap64(values)
+        return set(values)
 
     def events(
         self,
@@ -97,22 +117,27 @@ class MembershipHistoryStore:
         end: Optional[datetime] = None,
     ) -> List[MembershipChange]:
         context_id = self._resolve_context_id(context_id)
-        events = [
-            event for event in self._events
-            if event.context_id == context_id
-            and (start is None or event.effective_at >= start)
-            and (end is None or event.effective_at <= end)
-        ]
-        return sorted(
-            events,
-            key=lambda event: (
-                event.effective_at,
-                event.recorded_at,
-                event.context_version,
-                event.entity_id,
-                event.change_type,
-            ),
+        return list(
+            self.iter_events_between(context_id, start=start, end=end)
         )
+
+    def iter_events_between(
+        self,
+        context_id: str,
+        *,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ):
+        """Yield events in replay order without building a range list."""
+        context_id = self._resolve_context_id(context_id)
+        for event in self._events:
+            if event.context_id != context_id:
+                continue
+            if start is not None and event.effective_at < start:
+                continue
+            if end is not None and event.effective_at > end:
+                continue
+            yield event
 
     def state_at(
         self,
@@ -123,9 +148,9 @@ class MembershipHistoryStore:
         anchor_scores: Optional[Dict[int, float]] = None,
         anchor_time: Optional[datetime] = None,
     ) -> tuple[Set[int], Dict[int, float]]:
-        members = set(anchor_members)
+        members = self._mutable_membership(anchor_members)
         scores = dict(anchor_scores or {})
-        for event in self.events_between(
+        for event in self.iter_events_between(
             context_id, start=anchor_time, end=timestamp
         ):
             if event.change_type == "added":
@@ -157,9 +182,9 @@ class MembershipHistoryStore:
             anchor_scores=anchor_scores,
             anchor_time=anchor_time,
         )
-        ever_members = set(members)
+        ever_members = self._mutable_membership(members)
         max_scores = dict(scores)
-        for event in self.events_between(
+        for event in self.iter_events_between(
             context_id, start=start, end=end
         ):
             if event.change_type == "added":

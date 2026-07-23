@@ -365,6 +365,11 @@ context algebra executes first and the surviving entity membership is passed
 to the provider as an entity filter. An unsafe join fails with E301; a provider
 without entity-filter support fails with E302.
 
+A large materialized or MCP membership that cannot be pushed into the local
+relation fails with E303 before the base result is materialized. Runtimes may
+also configure an intermediate-row ceiling; exceeding it fails with E304
+before a DataFrame or equivalent in-memory result is allocated.
+
 ---
 
 ## 7. ALTER CONTEXT
@@ -527,6 +532,7 @@ Entity key compatibility is enforced: a context with key type `VARCHAR` cannot b
 | E001 - E099 | Syntax errors |
 | E100 - E199 | Semantic errors |
 | E200 - E299 | Runtime errors |
+| E300 - E399 | Bounded execution and federation errors |
 | W001 - W499 | Warnings |
 
 Codes assigned by this specification:
@@ -535,6 +541,9 @@ Codes assigned by this specification:
   duration; E153 - E158 invalid option combinations (section 6); E159 DROP
   RESTRICT dependency violation (section 8)
 - E200 membership snapshot missing or invalidated (section 6)
+- E301 unsafe REMOTE narrowing; E302 provider lacks required entity filtering;
+  E303 unsafe large-membership fallback; E304 intermediate row ceiling
+  exceeded (section 6)
 - W100 stale snapshot; W101 last refresh failed (section 6)
 
 See `contextql/errors.py` for the full registry and `docs/TOOLING.md` for the implemented lint rules.

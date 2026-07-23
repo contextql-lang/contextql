@@ -711,8 +711,12 @@ Change `DeepSeeSynchronizer`:
 
 - Initialize committed watermark and seen event IDs from
   `SynchronizerStateRepository`.
-- Persist applied event IDs and new watermark in the same transaction as
-  snapshot promotion.
+- When snapshot and synchronizer state share a durable repository, persist
+  applied event IDs and the new watermark in the same transaction as snapshot
+  promotion.
+- For the split in-memory membership/durable-state implementation, publish the
+  snapshot first, then commit watermark and event IDs. A failed state commit is
+  replayed at least once and must converge idempotently.
 - Do not update in-memory state until commit succeeds.
 - After restart, duplicate deliveries remain duplicates and the next fetch
   begins after the committed watermark.
@@ -1085,4 +1089,3 @@ The branch is complete only when all statements below are true:
 - [ ] Normative documentation matches executable behavior.
 - [ ] Both worktrees are clean and the final handoff records exact commits and
       verification evidence.
-

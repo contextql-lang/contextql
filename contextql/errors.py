@@ -148,6 +148,10 @@ E301 = ErrorCode("E301", Severity.ERROR, "REMOTE_NARROWING_UNSAFE",
                  "REMOTE join cannot be safely narrowed by context membership")
 E302 = ErrorCode("E302", Severity.ERROR, "REMOTE_FILTER_UNSUPPORTED",
                  "REMOTE provider does not support required entity filtering")
+E303 = ErrorCode("E303", Severity.ERROR, "MEMBERSHIP_FALLBACK_UNBOUNDED",
+                 "large membership cannot use the DataFrame fallback")
+E304 = ErrorCode("E304", Severity.ERROR, "INTERMEDIATE_RESULT_TOO_LARGE",
+                 "query intermediate result exceeds the configured row limit")
 
 # ── Semantic warnings (W100-W199) ───────────────────────────────────────
 

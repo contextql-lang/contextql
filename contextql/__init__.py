@@ -177,6 +177,7 @@ class Engine:
         catalog_repository=None,
         membership_store=None,
         history_store=None,
+        max_intermediate_rows: Optional[int] = None,
     ) -> None:
         from contextql.adapters.duckdb_adapter import DuckDBAdapter
         from contextql.semantic import InMemoryCatalog
@@ -212,6 +213,7 @@ class Engine:
             membership=membership_store,
             history=history_store,
             repository=self._catalog_repository,
+            max_intermediate_rows=max_intermediate_rows,
         )
         for entry in self._catalog_repository.load_contexts():
             self._catalog.put_context(entry)

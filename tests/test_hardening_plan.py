@@ -1,12 +1,13 @@
 """Regression coverage for post-trade correctness hardening WP1/WP4/WP6."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
 
 import contextql as cql
+from contextql.history import MembershipChange, MembershipHistoryStore
 from contextql.membership_roaring import RoaringMembershipStore
 from contextql.providers import RemoteResult
 
@@ -526,7 +527,6 @@ def test_unsafe_and_unsupported_remote_joins_fail_before_provider_call(engine):
             WHERE CONTEXT IN (plain);
             """
         )
-
     with pytest.raises(ValueError, match="E302"):
         engine.execute(
             """
@@ -536,3 +536,99 @@ def test_unsafe_and_unsupported_remote_joins_fail_before_provider_call(engine):
             WHERE CONTEXT IN (plain);
             """
         )
+
+
+def test_materialized_fallback_fails_before_dataframe_execution(monkeypatch):
+    engine = cql.Engine()
+    rows = 10_001
+    engine.register_table(
+        "no_pk",
+        pd.DataFrame(
+            {"txn_id": range(rows), "status": ["bad"] * rows}
+        ),
+    )
+    engine.execute(
+        """
+        CREATE CONTEXT unsafe_ctx ON txn_id
+        WITH (materialized = TRUE, storage = 'roaring')
+        AS SELECT txn_id FROM no_pk WHERE status = 'bad';
+        """
+    )
+    engine.execute("REFRESH CONTEXT unsafe_ctx;")
+    monkeypatch.setattr(
+        engine._adapter,
+        "execute_df",
+        lambda *_: (_ for _ in ()).throw(
+            AssertionError("base DataFrame must not be materialized")
+        ),
+    )
+    with pytest.raises(ValueError, match="E303"):
+        engine.execute(
+            "SELECT txn_id FROM no_pk WHERE CONTEXT IN (unsafe_ctx);"
+        )
+
+
+def test_intermediate_row_cap_fails_before_dataframe_execution(monkeypatch):
+    engine = cql.Engine(max_intermediate_rows=2)
+    engine.register_table(
+        "bounded",
+        pd.DataFrame({"txn_id": [1, 2, 3]}),
+        primary_key="txn_id",
+    )
+    monkeypatch.setattr(
+        engine._adapter,
+        "execute_df",
+        lambda *_: (_ for _ in ()).throw(
+            AssertionError("oversized DataFrame must not be materialized")
+        ),
+    )
+    with pytest.raises(ValueError, match="E304"):
+        engine.execute("SELECT txn_id FROM bounded;")
+
+
+def test_temporal_replay_preserves_roaring_membership_and_order():
+    from pyroaring import BitMap64
+
+    now = datetime.now(timezone.utc)
+    history = MembershipHistoryStore()
+    history.append(
+        [
+            MembershipChange(
+                context_id="ctx",
+                entity_id=3,
+                change_type="added",
+                recorded_at=now + timedelta(seconds=2),
+                effective_at=now + timedelta(seconds=2),
+                context_version=2,
+            ),
+            MembershipChange(
+                context_id="ctx",
+                entity_id=1,
+                change_type="removed",
+                recorded_at=now + timedelta(seconds=1),
+                effective_at=now + timedelta(seconds=1),
+                context_version=2,
+            ),
+        ]
+    )
+    at_members, _ = history.state_at(
+        "ctx",
+        now + timedelta(seconds=2),
+        anchor_members=BitMap64([1, 2]),
+        anchor_time=now,
+    )
+    between_members, _ = history.state_between(
+        "ctx",
+        now,
+        now + timedelta(seconds=2),
+        anchor_members=BitMap64([1, 2]),
+        anchor_time=now,
+    )
+    assert isinstance(at_members, BitMap64)
+    assert set(at_members) == {2, 3}
+    assert isinstance(between_members, BitMap64)
+    assert set(between_members) == {1, 2, 3}
+    assert [
+        event.entity_id
+        for event in history.iter_events_between("ctx")
+    ] == [1, 3]

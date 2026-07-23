@@ -101,6 +101,7 @@ class ContextQLExecutor:
         membership=None,
         history=None,
         repository=None,
+        max_intermediate_rows: Optional[int] = None,
     ):
         self.catalog = catalog
         self.adapter = adapter
@@ -111,6 +112,9 @@ class ContextQLExecutor:
         self._mcp_timeout_ms = mcp_timeout_ms
         self._remote_timeout_ms = remote_timeout_ms
         self._mcp_timeout_behavior = mcp_timeout_behavior
+        if max_intermediate_rows is not None and max_intermediate_rows <= 0:
+            raise ValueError("max_intermediate_rows must be positive.")
+        self._max_intermediate_rows = max_intermediate_rows
         self._mcp_result_cache: Dict = {}
         self.ddl = ContextDDLExecutor(
             catalog=catalog,
@@ -194,6 +198,8 @@ class ContextQLExecutor:
                 self._narrowed_members = (
                     self._resolve_narrowing_members(query)
                 )
+            if context_where is None:
+                self._guard_unbounded_context_fallback(query)
             remote_filters = self._plan_remote_entity_filters(query)
             temp_tables = self._materialize_remote_sources(
                 query, remote_filters
@@ -201,6 +207,16 @@ class ContextQLExecutor:
             base_sql = self._build_base_sql(
                 query, extra_key_cols, context_where=context_where
             )
+            if self._max_intermediate_rows is not None:
+                row_count = self.adapter.count_rows_up_to(
+                    base_sql, self._max_intermediate_rows
+                )
+                if row_count > self._max_intermediate_rows:
+                    raise ValueError(
+                        "[E304] query intermediate result exceeds the "
+                        f"configured limit of {self._max_intermediate_rows} "
+                        "rows; add more selective predicates."
+                    )
             df = self.adapter.execute_df(base_sql)
 
             if query.context_predicates and context_where is None:
@@ -356,8 +372,18 @@ class ContextQLExecutor:
         labels: Dict[int, str] = {}
         for pred in query.context_predicates:
             for ref in pred.refs:
-                if ref.source_kind in ("MCP", "REMOTE"):
+                if ref.source_kind == "REMOTE":
                     return None
+                if ref.source_kind == "MCP":
+                    provider_key = self._mcp_entity_keys.get(
+                        ref.name, primary_key
+                    )
+                    if provider_key.lower() != primary_key.lower():
+                        return None
+                    result = self._get_mcp_result(query, pred, ref)
+                    memberships[id(ref)] = result.membership_object()
+                    labels[id(ref)] = f"MCP({ref.name})"
+                    continue
                 entry = self._snapshot_entry(ref.name)
                 if entry is None:
                     return None
@@ -470,12 +496,7 @@ class ContextQLExecutor:
                     return None
                 if ref.source_kind == "MCP":
                     result = self._get_mcp_result(query, pred, ref)
-                    values = (
-                        result.entity_ids
-                        if result.entity_ids is not None
-                        else result.membership_array()
-                    )
-                    ref_memberships.append(set(values))
+                    ref_memberships.append(result.membership_object())
                     continue
                 entry = self._snapshot_entry(ref.name)
                 if entry is not None:
@@ -499,6 +520,35 @@ class ContextQLExecutor:
                 )
             )
         return self._compose_memberships(predicate_memberships, True)
+
+    def _guard_unbounded_context_fallback(self, query: QueryModel) -> None:
+        """Fail before base materialization for unsafe membership fallback."""
+        for pred in query.context_predicates:
+            for ref in pred.refs:
+                if ref.source_kind == "MCP":
+                    result = self._get_mcp_result(query, pred, ref)
+                    if result.cardinality > 10_000:
+                        raise ValueError(
+                            "[E303] large MCP membership requires a "
+                            "pushdown-compatible registered primary key."
+                        )
+                    continue
+                if ref.source_kind == "REMOTE":
+                    continue
+                entry = self._snapshot_entry(ref.name)
+                if entry is not None:
+                    resolved = resolve_snapshot(entry, self.membership)
+                    membership = self.membership.membership_object(
+                        resolved.membership_key,
+                        resolved.snapshot.version,
+                    )
+                    if len(membership) <= 10_000:
+                        continue
+                    raise ValueError(
+                        "[E303] large materialized context membership cannot "
+                        "use the unbounded DataFrame fallback; register a "
+                        "matching table primary key."
+                    )
 
     @staticmethod
     def _parse_temporal_value(value: str):
@@ -687,11 +737,16 @@ class ContextQLExecutor:
                         "[E162] large REMOTE entity filters require "
                         "contextql[roaring]."
                     ) from exc
+                membership_payload = (
+                    members.serialize()
+                    if hasattr(members, "serialize")
+                    else BitMap64(
+                        int(value) for value in members
+                    ).serialize()
+                )
                 entity_filter = EntityFilter(
                     column=remote_column,
-                    membership_bitmap=BitMap64(
-                        int(value) for value in members
-                    ).serialize(),
+                    membership_bitmap=membership_payload,
                     bitmap_encoding="roaring64",
                 )
             filters[remote_alias] = entity_filter
@@ -1241,11 +1296,7 @@ class ContextQLExecutor:
                 ProviderCall(
                     provider_name=ref.name,
                     provider_type="MCP",
-                    entity_count=(
-                        len(result.entity_ids)
-                        if result.entity_ids is not None
-                        else len(result.membership_array())
-                    ),
+                    entity_count=result.cardinality,
                     elapsed_ms=(
                         __import__("time").perf_counter() - started
                     ) * 1000,
@@ -1320,11 +1371,7 @@ class ContextQLExecutor:
                     self._trace.provider_calls.append(ProviderCall(
                         provider_name=ref.name,
                         provider_type="MCP",
-                        entity_count=(
-                            len(mcp_result.entity_ids)
-                            if mcp_result.entity_ids is not None
-                            else len(mcp_result.membership_array())
-                        ),
+                        entity_count=mcp_result.cardinality,
                         elapsed_ms=_mcp_elapsed,
                         data_as_of=getattr(mcp_result, 'data_as_of', None),
                     ))
@@ -1332,10 +1379,7 @@ class ContextQLExecutor:
             mcp_result = self._mcp_result_cache[cache_key]
             # ID-list results become sets; bitmap results stay as NumPy
             # arrays — never expanded into Python objects (plan 8.2).
-            if mcp_result.entity_ids is not None:
-                entity_ids = set(mcp_result.entity_ids)
-            else:
-                entity_ids = mcp_result.membership_array()
+            entity_ids = mcp_result.membership_object()
             key_col = self._resolve_mcp_key_column(df, query, pred, ref.name)
             # Record context in trace
             _mcp_label = f"MCP({ref.name})"

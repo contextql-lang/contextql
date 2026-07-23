@@ -25,6 +25,19 @@ class TestMCPResultContract:
         )
         assert sorted(result.membership_array()) == [5, 9, 2**40]
 
+    def test_bitmap_native_form_is_cached_without_dense_array(self):
+        from pyroaring import BitMap64
+
+        result = MCPResult(
+            entity_type="t",
+            membership_bitmap=roaring_payload(range(20_000)),
+            bitmap_encoding="roaring64",
+        )
+        membership = result.membership_object()
+        assert isinstance(membership, BitMap64)
+        assert result.membership_object() is membership
+        assert result.cardinality == 20_000
+
     def test_both_forms_rejected(self):
         with pytest.raises(ValueError, match="exactly one"):
             MCPResult(

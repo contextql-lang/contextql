@@ -73,6 +73,9 @@ class MCPResult:
     source_watermark: str | None = None
     evidence_refs: dict[int, str] | None = None
     next_cursor: str | None = None
+    _native_membership: Any = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         has_ids = self.entity_ids is not None
@@ -87,14 +90,15 @@ class MCPResult:
                 "MCPResult with membership_bitmap requires bitmap_encoding."
             )
 
-    def membership_array(self):
-        """Membership as a NumPy-compatible array without building a
-        Python list (plan 8.2: bitmaps are never expanded in the executor).
-        """
-        import numpy as np
-
+    def membership_object(self):
+        """Return a bounded sequence or native Roaring membership."""
+        if self._native_membership is not None:
+            return self._native_membership
         if self.entity_ids is not None:
-            return np.asarray(self.entity_ids)
+            self._native_membership = tuple(
+                int(value) for value in self.entity_ids
+            )
+            return self._native_membership
         payload = self.membership_bitmap or b""
         if len(payload) > MAX_BITMAP_PAYLOAD_BYTES:
             raise ValueError(
@@ -114,12 +118,26 @@ class MCPResult:
                 "package; install with: pip install 'contextql[roaring]'"
             ) from exc
         try:
-            bitmap = BitMap64.deserialize(payload)
+            self._native_membership = BitMap64.deserialize(payload)
         except Exception as exc:
             raise ValueError(
                 f"Malformed membership bitmap payload: {exc}"
             ) from exc
-        return np.asarray(bitmap.to_array(), dtype="int64")
+        return self._native_membership
+
+    @property
+    def cardinality(self) -> int:
+        """Membership cardinality without dense-array materialization."""
+        return len(self.membership_object())
+
+    def membership_array(self):
+        """Membership as a dense NumPy array compatibility representation."""
+        import numpy as np
+
+        membership = self.membership_object()
+        if self.entity_ids is not None:
+            return np.asarray(membership, dtype="int64")
+        return np.asarray(membership.to_array(), dtype="int64")
 
     def score_map(self) -> dict[int, float]:
         """Scores as an ``{entity_id: score}`` mapping."""

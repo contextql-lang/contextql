@@ -136,6 +136,13 @@ applies them through the membership store's delta path
   contract explicitly permits correction.
 - Commit the new watermark only after snapshot promotion.
 
+The current split in-memory membership/durable-state implementation publishes
+the snapshot first and then commits the watermark and event IDs. If the state
+commit fails, replay is at least once and converges through idempotent delta
+application. A deployment may claim single-transaction atomicity only when
+snapshot payload, pointer, watermark, and idempotency rows share one durable
+repository transaction.
+
 ## 5. Mock Connector
 
 Location (contextql-server):
