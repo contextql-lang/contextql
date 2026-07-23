@@ -314,6 +314,10 @@ class ContextQLExecutor:
                     return None
                 entries[ref.name] = entry
 
+        # key_qualifier/primary_key come from developer-registered catalog
+        # state, not runtime data. Note for future multi-tenant sandboxing:
+        # QUOTED_IDENTIFIER permits arbitrary interior text, so identifier
+        # validation must be added here before restricted execution modes.
         key_qualifier = query.from_table.alias or query.from_table.name
         clauses: List[str] = []
         for index, pred in enumerate(query.context_predicates):
