@@ -27,6 +27,9 @@ executor = [
 arrow = [
     "pyarrow>=12.0",
 ]
+roaring = [
+    "pyroaring>=1.0",
+]
 polars = [
     "polars>=0.19",
 ]
