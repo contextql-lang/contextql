@@ -171,6 +171,49 @@ class TestSnapshotStates:
         assert "W100" in codes
 
 
+class TestSnapshotOnlyContexts:
+    """Contexts whose membership arrives via the store (no SQL definition,
+    no adapter registration) — the connector-sync integration path (CS-8)."""
+
+    def test_snapshot_context_queries_and_scores(self, engine):
+        from datetime import datetime, timezone
+        engine.register_snapshot_context(
+            "external_risk", entity_key="txn_id", has_score=True
+        )
+        now = datetime.now(timezone.utc)
+        engine.membership.put_snapshot(
+            "external_risk",
+            [2, 5, 9],
+            computed_at=now,
+            data_as_of=now,
+            scores={2: 0.9, 5: 0.3, 9: 0.7},
+        )
+        result = engine.execute(
+            "SELECT txn_id, CONTEXT_SCORE() AS s FROM txns "
+            "WHERE CONTEXT IN (external_risk) ORDER BY CONTEXT DESC;"
+        )
+        df = result.to_pandas()
+        assert list(df["txn_id"]) == [2, 9, 5]
+        assert "__cql_members_0" in result.sql
+
+    def test_snapshot_context_composes_with_native(self, engine):
+        from datetime import datetime, timezone
+        engine.execute("REFRESH CONTEXT failed_txn;")
+        engine.register_snapshot_context(
+            "external_risk", entity_key="txn_id"
+        )
+        now = datetime.now(timezone.utc)
+        engine.membership.put_snapshot(
+            "external_risk", [3, 5], computed_at=now, data_as_of=now,
+        )
+        result = engine.execute(
+            "SELECT txn_id FROM txns "
+            "WHERE CONTEXT IN (failed_txn, external_risk) ORDER BY txn_id;"
+        )
+        # failed {1,2,5,8,10} union external {3,5}
+        assert list(result.to_pandas()["txn_id"]) == [1, 2, 3, 5, 8, 10]
+
+
 class TestScoringWithSnapshots:
     def test_scores_come_from_snapshot(self, engine):
         engine.execute(

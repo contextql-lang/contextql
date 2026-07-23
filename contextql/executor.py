@@ -211,6 +211,29 @@ class ContextQLExecutor:
     # Bitmap snapshot pushdown (plan 7.4, CS-11)
     # ---------------------------------------------------------
 
+    def _context_entity_key(self, name: str) -> str:
+        """Entity key for a context: catalog entry first, adapter fallback."""
+        entry = self.catalog.contexts.get(name.lower())
+        if entry is not None and entry.entity_key_name:
+            return entry.entity_key_name
+        try:
+            return self.adapter.get_context(name).entity_key_name
+        except KeyError:
+            raise ValueError(
+                f"Context '{name}' is not registered. Register it with "
+                "register_context(), context DDL, or a snapshot sync "
+                "before executing queries that reference it."
+            )
+
+    def _context_has_score(self, name: str) -> bool:
+        entry = self.catalog.contexts.get(name.lower())
+        if entry is not None:
+            return entry.has_score
+        try:
+            return self.adapter.get_context(name).has_score
+        except KeyError:
+            return False
+
     def _snapshot_entry(self, name: str):
         """Catalog entry if *name* is a materialized plain context."""
         entry = self.catalog.contexts.get(name.lower())
@@ -851,14 +874,10 @@ class ContextQLExecutor:
                 self._trace.contexts_resolved.append(_mcp_label)
             return df[key_col].isin(entity_ids)
 
-        try:
-            ctx = self.adapter.get_context(ref.name)
-        except KeyError:
-            raise ValueError(
-                f"Context '{ref.name}' is not registered in the adapter. "
-                "Call register_context() before executing queries that reference it."
-            )
-        key_col = self._resolve_dataframe_key_column(df, pred, ctx.entity_key_name)
+        # Metadata resolves catalog-first: snapshot-backed contexts (e.g.
+        # synced from a connector) may have no adapter registration.
+        entity_key_name = self._context_entity_key(ref.name)
+        key_col = self._resolve_dataframe_key_column(df, pred, entity_key_name)
         values = df[key_col]
 
         # Snapshot-backed contexts read the membership store, not the
@@ -964,10 +983,10 @@ class ContextQLExecutor:
                     else:
                         score_values = membership.astype(float)
                 else:
-                    ctx = self.adapter.get_context(ref.name)
-                    key_col = self._resolve_dataframe_key_column(df, pred, ctx.entity_key_name)
+                    entity_key_name = self._context_entity_key(ref.name)
+                    key_col = self._resolve_dataframe_key_column(df, pred, entity_key_name)
 
-                    if ctx.has_score:
+                    if self._context_has_score(ref.name):
                         # Snapshot scores are attached after membership
                         # narrowing (plan 7.4); live evaluation otherwise.
                         if (

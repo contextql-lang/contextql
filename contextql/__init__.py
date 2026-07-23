@@ -267,6 +267,56 @@ class Engine:
         entry = ContextCatalogEntry(name=name, entity_key_name=entity_key, has_score=has_score)
         self._catalog.contexts[name.lower()] = entry
 
+    def register_snapshot_context(
+        self,
+        name: str,
+        *,
+        entity_key: str,
+        has_score: bool = False,
+        entity_key_type: Optional[str] = None,
+    ) -> None:
+        """Register a snapshot-backed context whose membership arrives
+        through the membership store (e.g. synced from a connector).
+
+        The context participates in queries and bitmap pushdown exactly
+        like a materialized native context; membership and scores are
+        supplied by snapshot ingestion (``Engine.membership``), not by a
+        SQL definition (DECISIONS.md CS-8).
+        """
+        from contextql.semantic import (
+            ContextCatalogEntry,
+            EntityKeyType,
+            MaterializationSettings,
+        )
+
+        try:
+            key_type = (
+                EntityKeyType(entity_key_type)
+                if entity_key_type
+                else EntityKeyType.UNKNOWN
+            )
+        except ValueError:
+            key_type = EntityKeyType.UNKNOWN
+        entry = ContextCatalogEntry(
+            name=name,
+            entity_key_name=entity_key,
+            entity_key_type=key_type,
+            has_score=has_score,
+            lifecycle_state="active",
+            materialization=MaterializationSettings(
+                materialized=True,
+                storage="roaring",
+                refresh_mode="incremental",
+            ),
+        )
+        self._catalog.contexts[name.lower()] = entry
+
+    @property
+    def membership(self):
+        """The engine's membership snapshot store (CS-8): shared by
+        native materialized contexts and connector-synced contexts."""
+        return self._executor.membership
+
     def register_mcp_provider(
         self, name: str, provider, *, entity_key: Optional[str] = None
     ) -> None:
