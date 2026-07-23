@@ -474,24 +474,24 @@
       "python": "3.11.15",
       "cpu_count": 8,
       "cpu": "Intel64 Family 6 Model 158 Stepping 13, GenuineIntel",
-      "available_memory_mb": 1959.7,
-      "git_sha": "e4141ab7e74a5c43c4e60ff640f948025781df42",
-      "git_dirty": true,
+      "available_memory_mb": 1824.7,
+      "git_sha": "439f03605d1955beb91f79bac4810b7eba99d764",
+      "git_dirty": false,
       "duckdb": "1.5.5",
       "pandas": "3.0.5",
       "pyroaring": "1.1.0",
-      "timestamp": "2026-07-23T12:05:56.124983+00:00",
+      "timestamp": "2026-07-23T23:40:47.051996+00:00",
       "note": "Machine-specific measurements; not universal guarantees."
     },
     "rows": 10000000,
     "as_of": "2026-07-23 12:00:00",
     "generation": {
-      "seconds": 83.73,
-      "db_size_mb": 854.3
+      "seconds": 86.29,
+      "db_size_mb": 855.1
     },
     "contexts": {
       "unmatched_trade": {
-        "cold_materialization_s": 1.113,
+        "cold_materialization_s": 1.309,
         "cardinality": 162384,
         "serialized_bytes": 326025,
         "storage_kind": "roaring",
@@ -499,7 +499,7 @@
         "correctness_ok": true
       },
       "missing_confirmation": {
-        "cold_materialization_s": 0.78,
+        "cold_materialization_s": 0.799,
         "cardinality": 96145,
         "serialized_bytes": 193547,
         "storage_kind": "roaring",
@@ -507,7 +507,7 @@
         "correctness_ok": true
       },
       "economic_terms_break": {
-        "cold_materialization_s": 0.68,
+        "cold_materialization_s": 0.684,
         "cardinality": 62411,
         "serialized_bytes": 126079,
         "storage_kind": "roaring",
@@ -515,7 +515,7 @@
         "correctness_ok": true
       },
       "invalid_ssi": {
-        "cold_materialization_s": 0.648,
+        "cold_materialization_s": 1.67,
         "cardinality": 32832,
         "serialized_bytes": 66921,
         "storage_kind": "roaring",
@@ -523,7 +523,7 @@
         "correctness_ok": true
       },
       "settlement_overdue": {
-        "cold_materialization_s": 0.783,
+        "cold_materialization_s": 0.749,
         "cardinality": 43316,
         "serialized_bytes": 87889,
         "storage_kind": "roaring",
@@ -531,7 +531,7 @@
         "correctness_ok": true
       },
       "approaching_market_cutoff": {
-        "cold_materialization_s": 1.954,
+        "cold_materialization_s": 0.858,
         "cardinality": 197266,
         "serialized_bytes": 395789,
         "storage_kind": "roaring",
@@ -539,7 +539,7 @@
         "correctness_ok": true
       },
       "high_notional": {
-        "cold_materialization_s": 0.759,
+        "cold_materialization_s": 0.809,
         "cardinality": 154914,
         "serialized_bytes": 311085,
         "storage_kind": "roaring",
@@ -547,7 +547,7 @@
         "correctness_ok": true
       },
       "predicted_settlement_fail": {
-        "cold_materialization_s": 0.65,
+        "cold_materialization_s": 0.654,
         "cardinality": 28244,
         "serialized_bytes": 57745,
         "storage_kind": "roaring",
@@ -555,7 +555,7 @@
         "correctness_ok": true
       },
       "settlement_intervention_required": {
-        "cold_materialization_s": 0.874,
+        "cold_materialization_s": 0.885,
         "cardinality": 36712,
         "serialized_bytes": 74681,
         "storage_kind": "roaring",
@@ -565,26 +565,26 @@
     },
     "algebra": {
       "union_3way": {
-        "seconds": 0.00924,
+        "seconds": 0.000923,
         "cardinality": 275127,
         "sql_reference_count": 275127,
         "correctness_ok": true
       },
       "intersect_2way": {
-        "seconds": 0.002156,
+        "seconds": 0.018865,
         "cardinality": 3081,
         "sql_reference_count": 3081,
         "correctness_ok": true
       },
       "difference": {
-        "seconds": 0.000412,
+        "seconds": 0.000447,
         "cardinality": 147827,
         "sql_reference_count": 147827,
         "correctness_ok": true
       }
     },
     "top20_query": {
-      "warm_seconds": 12.792,
+      "warm_seconds": 0.753,
       "rows_returned": 20,
       "used_snapshot_pushdown": true,
       "max_priority": 1.0,
@@ -647,7 +647,7 @@
         "remote_transaction_id"
       ]
     },
-    "peak_rss_mb": 1268.4,
+    "peak_rss_mb": 1270.4,
     "max_refresh_batch_rows": 65536
   },
   "funnel": {
@@ -660,12 +660,12 @@
   "venn": {
     "regions": {
       "111": 82,
-      "100": 146583,
+      "110": 14475,
+      "001": 31155,
+      "101": 1244,
       "010": 81237,
       "011": 351,
-      "001": 31155,
-      "110": 14475,
-      "101": 1244
+      "100": 146583
     },
     "sets": {
       "unmatched_trade": 162384,

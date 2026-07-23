@@ -4,7 +4,7 @@ The generated HTML remains directly openable from disk. Re-run this script
 after a benchmark to replace its embedded data:
 
     python demo/build_post_trade_report.py \
-      --benchmark docs/benchmarks/post-trade-10m-2026-07-23.json \
+      --benchmark docs/benchmarks/post-trade-10m-2026-07-24.json \
       --db .venv/post-trade-10m.duckdb \
       --html demo/post_trade_demo_visual.html
 """
