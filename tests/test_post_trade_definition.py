@@ -94,6 +94,28 @@ LIMIT 20;
 """
 
 
+class TestKeywordPrefixedIdentifiers:
+    """Keyword terminals must not match inside identifiers (word-boundary
+    regression: 'notional_usd' once tokenized as NOT + 'ional_usd')."""
+
+    def test_identifiers_with_keyword_prefixes_parse(self, parser):
+        parser.parse(
+            "SELECT notional_usd, selection, fromage, inner_flag "
+            "FROM orders WHERE notional_usd > 58000000 AND andes = 1;"
+        )
+
+    def test_definition_text_reconstruction_intact(self, parser):
+        from contextql.semantic import SemanticLowerer
+        model = SemanticLowerer().lower(
+            parser.parse(
+                "CREATE CONTEXT high_notional ON transaction_id AS "
+                "SELECT transaction_id FROM transactions "
+                "WHERE notional_usd > 58000000;"
+            )
+        )[0]
+        assert "notional_usd" in model.definition_sql
+
+
 class TestPlannedDefinitionParses:
     """The complete planned statements must parse with the current grammar."""
 
