@@ -79,6 +79,9 @@ class DuckDBAdapter:
             score_column_name=score_column_name,
         )
 
+    def unregister_context(self, name: str) -> None:
+        self._contexts.pop(name, None)
+
     def get_context(self, name: str) -> DuckDBRegisteredContext:
         if name not in self._contexts:
             raise KeyError(f"Unknown context: {name}")

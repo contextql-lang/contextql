@@ -210,6 +210,7 @@ class Engine:
         df: "pd.DataFrame",
         *,
         primary_key: Optional[str] = None,
+        primary_key_type: Optional[str] = None,
         alias: Optional[str] = None,
     ) -> None:
         """Register a pandas DataFrame as a queryable table.
@@ -218,12 +219,19 @@ class Engine:
             name: Table name used in SQL queries.
             df: The pandas DataFrame to register.
             primary_key: Optional primary key column name (used by the semantic analyzer).
+            primary_key_type: Optional key type (``"INT64"``, ``"VARCHAR"``,
+                ``"UUID"``); used to validate bitmap storage requests (E157).
             alias: Optional short alias for the table (e.g. ``"i"`` for ``"invoices"``).
         """
         self._adapter.register_table(name, df)
         if primary_key is not None:
             from contextql.semantic import TableCatalogEntry
-            entry = TableCatalogEntry(name=name, alias=alias, primary_key_name=primary_key)
+            entry = TableCatalogEntry(
+                name=name,
+                alias=alias,
+                primary_key_name=primary_key,
+                primary_key_type=primary_key_type or "UNKNOWN",
+            )
             self._catalog.tables[name.lower()] = entry
 
     def register_context(
@@ -258,6 +266,56 @@ class Engine:
         from contextql.semantic import ContextCatalogEntry
         entry = ContextCatalogEntry(name=name, entity_key_name=entity_key, has_score=has_score)
         self._catalog.contexts[name.lower()] = entry
+
+    def register_snapshot_context(
+        self,
+        name: str,
+        *,
+        entity_key: str,
+        has_score: bool = False,
+        entity_key_type: Optional[str] = None,
+    ) -> None:
+        """Register a snapshot-backed context whose membership arrives
+        through the membership store (e.g. synced from a connector).
+
+        The context participates in queries and bitmap pushdown exactly
+        like a materialized native context; membership and scores are
+        supplied by snapshot ingestion (``Engine.membership``), not by a
+        SQL definition (DECISIONS.md CS-8).
+        """
+        from contextql.semantic import (
+            ContextCatalogEntry,
+            EntityKeyType,
+            MaterializationSettings,
+        )
+
+        try:
+            key_type = (
+                EntityKeyType(entity_key_type)
+                if entity_key_type
+                else EntityKeyType.UNKNOWN
+            )
+        except ValueError:
+            key_type = EntityKeyType.UNKNOWN
+        entry = ContextCatalogEntry(
+            name=name,
+            entity_key_name=entity_key,
+            entity_key_type=key_type,
+            has_score=has_score,
+            lifecycle_state="active",
+            materialization=MaterializationSettings(
+                materialized=True,
+                storage="roaring",
+                refresh_mode="incremental",
+            ),
+        )
+        self._catalog.contexts[name.lower()] = entry
+
+    @property
+    def membership(self):
+        """The engine's membership snapshot store (CS-8): shared by
+        native materialized contexts and connector-synced contexts."""
+        return self._executor.membership
 
     def register_mcp_provider(
         self, name: str, provider, *, entity_key: Optional[str] = None
@@ -329,13 +387,26 @@ class Engine:
     # ---------------------------------------------------------
 
     def execute(self, sql: str) -> Result:
-        """Execute a ContextQL SELECT query and return a :class:`Result`.
+        """Execute a ContextQL statement and return a :class:`Result`.
+
+        Supports SELECT queries and context DDL (CREATE / ALTER / DROP /
+        SHOW / DESCRIBE / VALIDATE / REFRESH CONTEXT).
 
         Raises:
-            ValueError: If the query has semantic errors or references unregistered contexts.
+            ValueError: If the statement has semantic errors or references
+                unregistered contexts.
         """
         exec_result = self._executor.execute_sql(sql)
         return Result(exec_result)
+
+    def on_ddl_audit(self, callback) -> None:
+        """Register a callback invoked with an event dict for every
+        executed context DDL statement (create/alter/drop/validate/refresh).
+
+        The event dict contains at least ``action``, ``context``, and an ISO
+        ``timestamp``.
+        """
+        self._executor.ddl.audit_callbacks.append(callback)
 
     def explain(self, sql: str) -> str:
         """Return a human-readable query plan for a ContextQL statement."""

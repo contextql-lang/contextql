@@ -1,0 +1,102 @@
+{
+  "environment": {
+    "platform": "Linux-7.0.0-28-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "cpu_count": 24,
+    "timestamp": "2026-07-23T08:15:09.007651+00:00",
+    "note": "Machine-specific measurements; not universal guarantees."
+  },
+  "rows": 10000000,
+  "as_of": "2026-07-23 12:00:00",
+  "generation": {
+    "seconds": 26.83,
+    "db_size_mb": 854.1
+  },
+  "contexts": {
+    "unmatched_trade": {
+      "cold_materialization_s": 0.262,
+      "cardinality": 162384,
+      "serialized_bytes": 326025,
+      "sql_reference_count": 162384,
+      "correctness_ok": true
+    },
+    "missing_confirmation": {
+      "cold_materialization_s": 0.273,
+      "cardinality": 96145,
+      "serialized_bytes": 193547,
+      "sql_reference_count": 96145,
+      "correctness_ok": true
+    },
+    "economic_terms_break": {
+      "cold_materialization_s": 0.266,
+      "cardinality": 62411,
+      "serialized_bytes": 126079,
+      "sql_reference_count": 62411,
+      "correctness_ok": true
+    },
+    "invalid_ssi": {
+      "cold_materialization_s": 0.238,
+      "cardinality": 32832,
+      "serialized_bytes": 66921,
+      "sql_reference_count": 32832,
+      "correctness_ok": true
+    },
+    "settlement_overdue": {
+      "cold_materialization_s": 0.258,
+      "cardinality": 43316,
+      "serialized_bytes": 87889,
+      "sql_reference_count": 43316,
+      "correctness_ok": true
+    },
+    "approaching_market_cutoff": {
+      "cold_materialization_s": 0.277,
+      "cardinality": 197266,
+      "serialized_bytes": 395789,
+      "sql_reference_count": 197266,
+      "correctness_ok": true
+    },
+    "high_notional": {
+      "cold_materialization_s": 0.27,
+      "cardinality": 154914,
+      "serialized_bytes": 311085,
+      "sql_reference_count": 154914,
+      "correctness_ok": true
+    },
+    "predicted_settlement_fail": {
+      "cold_materialization_s": 0.255,
+      "cardinality": 28244,
+      "serialized_bytes": 57745,
+      "sql_reference_count": 28244,
+      "correctness_ok": true
+    },
+    "settlement_intervention_required": {
+      "cold_materialization_s": 0.27,
+      "cardinality": 36712,
+      "serialized_bytes": 74681,
+      "sql_reference_count": 36712,
+      "correctness_ok": true
+    }
+  },
+  "algebra": {
+    "union_3way": {
+      "seconds": 0.000711,
+      "cardinality": 275127,
+      "sql_reference_count": 275127
+    },
+    "intersect_2way": {
+      "seconds": 0.000268,
+      "cardinality": 3081
+    },
+    "difference": {
+      "seconds": 0.000206,
+      "cardinality": 147827
+    }
+  },
+  "top20_query": {
+    "warm_seconds": 0.293,
+    "rows_returned": 20,
+    "used_snapshot_pushdown": true,
+    "max_priority": 1.0
+  },
+  "peak_rss_mb": 1448.7
+}
