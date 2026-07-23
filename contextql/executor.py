@@ -7,8 +7,12 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
+import numpy as np
+
 from contextql.adapters.duckdb_adapter import DuckDBAdapter
 from contextql.context_ddl import ContextDDLExecutor
+from contextql.context_options import parse_duration_seconds
+from contextql.errors import Severity
 from contextql.semantic import (
     AlterContextModel,
     AnalysisResult,
@@ -121,6 +125,7 @@ class ContextQLExecutor:
             raise ValueError("No statements found.")
 
         stmt = analysis.statements[0]
+        self._pending_warnings: List = []
         if isinstance(stmt, DDL_STATEMENT_TYPES):
             df = self.ddl.execute(stmt)
             return ExecutionResult(
@@ -135,6 +140,9 @@ class ContextQLExecutor:
             )
 
         df, generated_sql = self._execute_query(stmt)
+
+        if self._pending_warnings:
+            analysis.diagnostics.extend(self._pending_warnings)
 
         trace = getattr(self, '_trace', None)
         return ExecutionResult(
@@ -153,14 +161,22 @@ class ContextQLExecutor:
         self._mcp_result_cache = {}
         self._trace = ContextTrace()
 
+        # Snapshot-state gate: E200 for materialized-without-snapshot,
+        # W100 for stale snapshots (SPEC section 6).
+        self._check_snapshot_states(query)
+
         # Materialise REMOTE sources before building SQL
         temp_tables = self._materialize_remote_sources(query)
+        member_tables: List[str] = []
         try:
             extra_key_cols = self._collect_extra_key_cols(query)
-            base_sql = self._build_base_sql(query, extra_key_cols)
+            context_where = self._prepare_bitmap_pushdown(query, member_tables)
+            base_sql = self._build_base_sql(
+                query, extra_key_cols, context_where=context_where
+            )
             df = self.adapter.execute_df(base_sql)
 
-            if query.context_predicates:
+            if query.context_predicates and context_where is None:
                 df = self._apply_context_filters(df, query)
 
             if query.uses_context_score or any(item.is_context_order for item in query.order_items):
@@ -185,11 +201,137 @@ class ContextQLExecutor:
 
             return df.reset_index(drop=True), base_sql
         finally:
-            for t in temp_tables:
+            for t in temp_tables + member_tables:
                 try:
                     self.adapter.conn.unregister(t)
                 except Exception:
                     pass
+
+    # ---------------------------------------------------------
+    # Bitmap snapshot pushdown (plan 7.4, CS-11)
+    # ---------------------------------------------------------
+
+    def _snapshot_entry(self, name: str):
+        """Catalog entry if *name* is a materialized plain context."""
+        entry = self.catalog.contexts.get(name.lower())
+        if entry is None:
+            return None
+        materialization = getattr(entry, "materialization", None)
+        if materialization is None or not materialization.materialized:
+            return None
+        return entry
+
+    def _check_snapshot_states(self, query: QueryModel) -> None:
+        """Enforce SPEC section 6 snapshot-state behavior (E200 / W100)."""
+        from contextql.semantic import SemanticDiagnostic
+        from datetime import datetime, timezone
+
+        for pred in query.context_predicates:
+            for ref in pred.refs:
+                if ref.source_kind in ("MCP", "REMOTE"):
+                    continue
+                entry = self._snapshot_entry(ref.name)
+                if entry is None:
+                    continue
+                snapshot = self.membership.get_snapshot(ref.name)
+                if snapshot is None:
+                    raise ValueError(
+                        f"[E200] context '{ref.name}' is materialized but "
+                        f"has no current snapshot; run REFRESH CONTEXT "
+                        f"{ref.name}."
+                    )
+                stale_after = entry.materialization.stale_after
+                threshold = parse_duration_seconds(stale_after)
+                if threshold is not None:
+                    age = (
+                        datetime.now(timezone.utc) - snapshot.computed_at
+                    ).total_seconds()
+                    if age > threshold:
+                        self._pending_warnings.append(
+                            SemanticDiagnostic(
+                                code="W100",
+                                severity=Severity.WARNING,
+                                message=(
+                                    f"context '{ref.name}' snapshot is "
+                                    f"stale (age {int(age)}s, stale_after "
+                                    f"{stale_after})."
+                                ),
+                                hint=f"Run REFRESH CONTEXT {ref.name}.",
+                            )
+                        )
+
+    def _prepare_bitmap_pushdown(
+        self, query: QueryModel, member_tables: List[str]
+    ) -> Optional[str]:
+        """Build a SQL membership predicate from context snapshots.
+
+        Returns a WHERE fragment when every referenced context is a
+        materialized plain context with a current snapshot sharing the FROM
+        table's primary key; otherwise ``None`` (legacy in-Python path).
+        Registers per-predicate member relations and appends their names to
+        *member_tables* for cleanup.
+        """
+        if not query.context_predicates or not query.from_table:
+            return None
+
+        table_entry = self.catalog.tables.get(query.from_table.name.lower())
+        if table_entry is None or not table_entry.primary_key_name:
+            return None
+        primary_key = table_entry.primary_key_name
+
+        entries: Dict[str, object] = {}
+        for pred in query.context_predicates:
+            for ref in pred.refs:
+                if ref.source_kind in ("MCP", "REMOTE"):
+                    return None
+                entry = self._snapshot_entry(ref.name)
+                if entry is None:
+                    return None
+                if entry.entity_key_name.lower() != primary_key.lower():
+                    return None
+                entries[ref.name] = entry
+
+        key_qualifier = query.from_table.alias or query.from_table.name
+        clauses: List[str] = []
+        for index, pred in enumerate(query.context_predicates):
+            names = [ref.name for ref in pred.refs]
+            intersect = bool(pred.all_mode or pred.sequence_mode)
+            member_array = self._compose_member_array(names, intersect)
+            table_name = f"__cql_members_{index}"
+            self.adapter.conn.register(
+                table_name, pd.DataFrame({"entity_id": member_array})
+            )
+            member_tables.append(table_name)
+            operator = "NOT IN" if pred.negated else "IN"
+            clauses.append(
+                f"{key_qualifier}.{primary_key} {operator} "
+                f"(SELECT entity_id FROM {table_name})"
+            )
+            for name in names:
+                version = self.membership.get_snapshot(name).version
+                label = f"{name}@v{version}"
+                if label not in self._trace.contexts_resolved:
+                    self._trace.contexts_resolved.append(label)
+
+        return " AND ".join(clauses)
+
+    def _compose_member_array(
+        self, names: List[str], intersect: bool
+    ) -> "np.ndarray":
+        """Compose snapshot memberships without Python-set expansion when
+        the store supports bitmap-native algebra."""
+        if hasattr(self.membership, "compose"):
+            if intersect:
+                bitmap = self.membership.compose(intersect_of=names)
+            else:
+                bitmap = self.membership.compose(union_of=names)
+            return np.asarray(bitmap.to_array(), dtype="int64")
+        members = (
+            self.membership.intersect(names)
+            if intersect
+            else self.membership.union(names)
+        )
+        return np.fromiter(members, dtype="int64", count=len(members))
 
     # ---------------------------------------------------------
     # REMOTE source materialisation
@@ -363,7 +505,12 @@ class ContextQLExecutor:
                     return b_col
         return None
 
-    def _build_base_sql(self, query: QueryModel, extra_key_cols: Optional[Dict[str, str]] = None) -> str:
+    def _build_base_sql(
+        self,
+        query: QueryModel,
+        extra_key_cols: Optional[Dict[str, str]] = None,
+        context_where: Optional[str] = None,
+    ) -> str:
         if not query.from_table:
             raise ValueError("Query has no FROM table.")
 
@@ -383,8 +530,13 @@ class ContextQLExecutor:
         if joins_sql:
             parts.append(joins_sql)
 
-        if non_context_where:
-            parts.append(f"WHERE {non_context_where}")
+        where_clauses = [
+            clause for clause in (non_context_where, context_where) if clause
+        ]
+        if where_clauses:
+            parts.append(
+                "WHERE " + " AND ".join(f"({c})" for c in where_clauses)
+            )
 
         if query.group_by:
             parts.append(f"GROUP BY {query.group_by}")
@@ -700,10 +852,20 @@ class ContextQLExecutor:
         key_col = self._resolve_dataframe_key_column(df, pred, ctx.entity_key_name)
         values = df[key_col]
 
-        context_keys = self.adapter.resolve_context_keys(ref.name)
+        # Snapshot-backed contexts read the membership store, not the
+        # definition SQL (plan 7.4); others resolve live via the adapter.
+        snapshot = None
+        if self._snapshot_entry(ref.name) is not None:
+            snapshot = self.membership.get_snapshot(ref.name)
+        if snapshot is not None:
+            context_keys = self.membership.members(ref.name)
+            label = f"{ref.name}@v{snapshot.version}"
+        else:
+            context_keys = self.adapter.resolve_context_keys(ref.name)
+            label = ref.name
         # Record native context in trace
-        if hasattr(self, '_trace') and ref.name not in self._trace.contexts_resolved:
-            self._trace.contexts_resolved.append(ref.name)
+        if hasattr(self, '_trace') and label not in self._trace.contexts_resolved:
+            self._trace.contexts_resolved.append(label)
         return values.isin(context_keys)
 
     def _resolve_via_identity_map(
@@ -797,7 +959,16 @@ class ContextQLExecutor:
                     key_col = self._resolve_dataframe_key_column(df, pred, ctx.entity_key_name)
 
                     if ctx.has_score:
-                        score_map = self.adapter.resolve_context_score_map(ref.name)
+                        # Snapshot scores are attached after membership
+                        # narrowing (plan 7.4); live evaluation otherwise.
+                        if (
+                            self._snapshot_entry(ref.name) is not None
+                            and self.membership.get_snapshot(ref.name)
+                            is not None
+                        ):
+                            score_map = self.membership.scores(ref.name)
+                        else:
+                            score_map = self.adapter.resolve_context_score_map(ref.name)
                         score_values = df[key_col].map(score_map).fillna(0.0)
                     else:
                         score_values = membership.astype(float)
@@ -905,6 +1076,19 @@ class ContextQLExecutor:
                     ascending=[ascending, False if not ascending else True],
                 )
 
+        # Plain column ordering (result row order is not guaranteed by the
+        # base SQL — the membership semi-join in particular reorders rows).
+        by: List[str] = []
+        ascending_flags: List[bool] = []
+        for item in query.order_items:
+            column = item.column_name
+            if column and column in df.columns:
+                by.append(column)
+                ascending_flags.append(
+                    (item.direction or "ASC").upper() == "ASC"
+                )
+        if by:
+            return df.sort_values(by=by, ascending=ascending_flags, kind="mergesort")
         return df
 
     # ---------------------------------------------------------
