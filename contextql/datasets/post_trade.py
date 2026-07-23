@@ -330,7 +330,7 @@ REFERENCE_CONTEXT_SQL: dict = {
     "approaching_market_cutoff": (
         "SELECT transaction_id FROM {table} "
         "WHERE settlement_status NOT IN ('settled', 'cancelled') "
-        "AND market_cutoff_at <= TIMESTAMP '{as_of}' + INTERVAL 2 HOUR"
+        "AND market_cutoff_at <= TIMESTAMP '{as_of}' + INTERVAL '2 hours'"
     ),
     "high_notional": (
         "SELECT transaction_id FROM {table} WHERE notional_usd > 58000000"
@@ -343,7 +343,7 @@ REFERENCE_CONTEXT_SQL: dict = {
         "SELECT transaction_id FROM {table} "
         "WHERE settlement_status NOT IN ('settled', 'cancelled') "
         "AND (contractual_settle_date < CAST(TIMESTAMP '{as_of}' AS DATE) "
-        "     OR market_cutoff_at <= TIMESTAMP '{as_of}' + INTERVAL 2 HOUR) "
+        "     OR market_cutoff_at <= TIMESTAMP '{as_of}' + INTERVAL '2 hours') "
         "AND (match_status <> 'matched' OR ssi_valid = FALSE "
         "     OR confirmation_received = FALSE OR fields_mismatched > 0 "
         "     OR predicted_fail_probability >= 0.80)"
