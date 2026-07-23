@@ -260,6 +260,79 @@ CREATE CONTEXT combined ON entity_id AS
 
 Strategies: `UNION`, `INTERSECT`, `WEIGHTED`.
 
+### Options (WITH)
+
+The `WITH (option = value, ...)` clause configures materialization, storage,
+refresh, and history behavior. Standardized options:
+
+| Option | Type | Values | Default | Meaning |
+|---|---|---|---|---|
+| `materialized` | boolean | `TRUE`, `FALSE` | `FALSE` | Maintain a reusable membership snapshot |
+| `storage` | string | `'set'`, `'roaring'`, `'auto'` | `'auto'` | Requested membership representation |
+| `refresh_mode` | string | `'manual'`, `'scheduled'`, `'incremental'` | `'manual'` | How new snapshots are produced |
+| `refresh_interval` | duration | duration string | none | Scheduled refresh frequency |
+| `stale_after` | duration | duration string | none (never stale) | Maximum acceptable snapshot age |
+| `history` | boolean | `TRUE`, `FALSE` | `FALSE` | Record membership changes |
+| `history_retention` | duration | duration string | none (unbounded) | Retention policy for membership history |
+| `source_watermark` | identifier | column name | none | Source column/cursor used for incremental refresh |
+
+**Option names** are case-insensitive identifiers. String option values are
+case-sensitive and must be single-quoted. Unknown option names are a semantic
+error (E150).
+
+**Duplicate options.** Specifying the same option (case-insensitively) more
+than once in a single `WITH` clause is a semantic error (E151). There is no
+last-writer-wins behavior.
+
+**Duration syntax.** A duration is a single-quoted string of the form
+`'<positive integer> <unit>'`. Units: `second`, `minute`, `hour`, `day`, with
+an optional trailing `s` (`'90 days'`, `'1 minute'`). Units are
+case-insensitive. Any other form is a semantic error (E152).
+
+**Validation rules.** The following combinations are semantic errors:
+
+| Rule | Error |
+|---|---|
+| `refresh_interval` set while `refresh_mode` is not `'scheduled'` | E153 |
+| `refresh_mode = 'incremental'` without `source_watermark` | E154 |
+| `history_retention` set while `history = FALSE` | E155 |
+| `refresh_mode` of `'scheduled'` or `'incremental'` while `materialized = FALSE` | E156 |
+| `storage = 'roaring'` on a non-integer entity key | E157 |
+| `stale_after` less than `refresh_interval` | E158 |
+
+`storage = 'auto'` selects a Roaring Bitmap for non-negative integer entity
+keys and a set representation otherwise.
+
+### Snapshots and Membership State
+
+When `materialized = TRUE`, current membership is stored as a versioned,
+immutable snapshot (a Roaring Bitmap for integer keys). A snapshot contains
+entity IDs only; scores are stored separately and joined by entity ID.
+Snapshot metadata records `version`, `computed_at`, `data_as_of`,
+`valid_from`, `valid_to`, definition hash, cardinality, and source watermark.
+
+Refresh always builds a new snapshot and atomically promotes it. Readers use
+the previously promoted snapshot until promotion succeeds.
+
+Query behavior by snapshot state:
+
+| State | Behavior |
+|---|---|
+| Missing (never refreshed) | Runtime error E200; the message directs the user to `REFRESH CONTEXT` |
+| Fresh | Snapshot is used directly |
+| Stale (`age > stale_after`) | Query succeeds; warning W100 with snapshot age is attached to the result |
+| Refreshing | Query uses the current (previous) snapshot; refresh is invisible to readers |
+| Failed refresh | Last successfully promoted snapshot remains current; query succeeds with warning W101 carrying the failure detail |
+
+### TEMPORAL Semantics
+
+`TEMPORAL (column, granularity)` declares event-time semantics: `column` is
+the event-time column of the definition and `granularity` is the resolution at
+which membership changes are recorded. It enables membership history and
+temporal qualifiers (`AT`, `BETWEEN`), which are resolved against recorded
+membership history — not against timestamps embedded in a bitmap. A bitmap
+never contains per-member timestamps or evidence.
+
 ---
 
 ## 7. ALTER CONTEXT
@@ -274,6 +347,17 @@ ALTER CONTEXT name SET TAGS ('tag1', ...)
 ALTER CONTEXT name SET STATE 'state_name'
 ```
 
+### Definition Changes and Invalidation
+
+`CREATE OR REPLACE CONTEXT` and `ALTER CONTEXT ... SET DEFINITION` increment
+the context version and record a new definition hash. The current snapshot is
+invalidated: it no longer satisfies membership queries, and prior snapshot
+versions remain readable only through explicit version/timestamp qualifiers.
+For a materialized context, a new snapshot must be produced (by the configured
+refresh mode or an explicit `REFRESH CONTEXT`) before unqualified membership
+queries succeed; until then queries fail with E200 as for a missing snapshot.
+`SET SCORE` / `DROP SCORE` invalidate stored scores but not membership.
+
 ---
 
 ## 8. Context Lifecycle
@@ -286,6 +370,15 @@ REFRESH CONTEXT name [WITH PARAMETERS (arg := value, ...)]
 REFRESH ALL CONTEXTS [WHERE predicate]
 VALIDATE CONTEXT name
 ```
+
+### DROP Dependency Behavior
+
+The default drop mode is `RESTRICT`: dropping a context that other contexts
+depend on (through `COMPOSE` or definition references) is a semantic error
+(E159) naming the dependents. `CASCADE` drops the context and all transitive
+dependents, recording one audit event per dropped object. Snapshots and
+membership history of dropped contexts are removed subject to
+`history_retention`.
 
 ---
 
@@ -401,7 +494,16 @@ Entity key compatibility is enforced: a context with key type `VARCHAR` cannot b
 |-------|----------|
 | E001 - E099 | Syntax errors |
 | E100 - E199 | Semantic errors |
+| E200 - E299 | Runtime errors |
 | W001 - W499 | Warnings |
+
+Codes assigned by this specification:
+
+- E150 unknown context option; E151 duplicate context option; E152 invalid
+  duration; E153 - E158 invalid option combinations (section 6); E159 DROP
+  RESTRICT dependency violation (section 8)
+- E200 membership snapshot missing or invalidated (section 6)
+- W100 stale snapshot; W101 last refresh failed (section 6)
 
 See `contextql/errors.py` for the full registry and `docs/TOOLING.md` for the implemented lint rules.
 

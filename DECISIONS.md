@@ -22,6 +22,7 @@ Decision IDs correspond to the originating document:
 | GQ | GUARDIAN (security, governance & compliance) |
 | DX | DEVX (developer tooling & experience) |
 | IM | Implementation decisions (parser, tooling) |
+| CS | Context storage (membership snapshots, bitmaps, options) |
 
 Each entry records:
 
@@ -1100,6 +1101,245 @@ Fail-fast is safer than silent wrong results. The `entity_key` parameter keeps t
 Queries that relied on the `df.columns[0]` fallback (producing silently wrong results) now raise errors. Users must register tables with `primary_key=`, pass `entity_key=` to `register_mcp_provider()`, or use `register_identity_map()`.
 
 **Version:** v1
+
+---
+
+# Context Storage Decisions (Post-Trade Roaring Contexts)
+
+Decisions CS-1 through CS-12 fix the storage model for materialized context
+membership introduced on the `post-trade-roaring-contexts` branch. CS-13
+through CS-16 fix the option semantics specified in SPEC.md section 6.
+
+## CS-1 — Facts and context flags are separated
+
+**Decision:**
+The transaction (source) table stores facts only. A new context must never
+require adding a boolean column to the source table.
+
+**Rationale:**
+Context membership is derived, versioned state; embedding it in source tables
+couples schema migrations to context definitions and prevents snapshot
+versioning.
+
+**Version:** v0.3
+
+---
+
+## CS-2 — A context is a catalog object, not a table
+
+**Decision:**
+Contexts are catalog objects with definitions, versions, lifecycle state, and
+snapshots. No dedicated relational table exists per context.
+
+**Rationale:**
+Keeps context count unbounded without schema growth; makes lifecycle,
+versioning, and audit uniform across contexts.
+
+**Version:** v0.3
+
+---
+
+## CS-3 — Membership is a versioned Roaring Bitmap
+
+**Decision:**
+Current integer membership of a materialized context is stored in a versioned
+Roaring Bitmap. The bitmap contains entity IDs only — never per-member
+timestamps or evidence.
+
+**Rationale:**
+Roaring Bitmaps give compact storage and fast union/intersection/difference.
+Keeping payloads out of the bitmap keeps membership cheap to store, compare,
+and compose.
+
+**Version:** v0.3
+
+---
+
+## CS-4 — Snapshot metadata is explicit
+
+**Decision:**
+Snapshot metadata stores `version`, `computed_at`, `data_as_of`,
+`valid_from`, `valid_to`, definition hash, cardinality, and source watermark.
+
+**Rationale:**
+Provenance and staleness decisions require metadata that cannot be derived
+from the bitmap itself.
+
+**Version:** v0.3
+
+---
+
+## CS-5 — History is a shared append-oriented store
+
+**Decision:**
+Membership changes (additions, removals, score changes) are recorded in one
+shared append-oriented history store, not one table per context and not one
+relational row per current member.
+
+**Rationale:**
+Entry/exit history is naturally an event stream. A shared store keeps
+retention, audit, and temporal queries uniform.
+
+**Version:** v0.3
+
+---
+
+## CS-6 — Scores are stored separately
+
+**Decision:**
+Scores are stored outside the membership bitmap and joined by entity ID.
+
+**Rationale:**
+Bitmaps cannot carry payloads without losing their compactness and algebraic
+properties; scores change more often than membership.
+
+**Version:** v0.3
+
+---
+
+## CS-7 — Refresh is copy-and-promote
+
+**Decision:**
+Refresh always builds a new immutable snapshot and atomically promotes it.
+Readers continue using the previous snapshot until promotion succeeds. A
+failed refresh leaves the last good snapshot current.
+
+**Rationale:**
+Reader isolation without locking; failure containment; prior versions remain
+queryable.
+
+**Version:** v0.3
+
+---
+
+## CS-8 — One membership store for all context sources
+
+**Decision:**
+Native SQL contexts and connector-supplied (MCP) contexts use the same
+membership store and algebra.
+
+**Rationale:**
+Composition across sources must be uniform; a connector is just another
+producer of snapshots.
+
+**Version:** v0.3
+
+---
+
+## CS-9 — Integer keys first
+
+**Decision:**
+Non-negative integer entity keys are the first supported bitmap key type.
+String, UUID, and composite keys require a separately versioned surrogate-key
+dictionary and are out of scope for the first proof.
+
+**Rationale:**
+Roaring Bitmaps operate on integers; surrogate dictionaries add versioning
+complexity that the first proof does not need.
+
+**Version:** v0.3
+
+---
+
+## CS-10 — Credentials are references
+
+**Decision:**
+Connector credentials are referenced through deployment configuration or a
+secret manager. They never appear in ContextQL source or DDL.
+
+**Rationale:**
+DDL is persisted, versioned, and audited; secrets must not be.
+
+**Version:** v0.3
+
+---
+
+## CS-11 — Selective membership is applied before materialization
+
+**Decision:**
+For selective queries, membership narrowing happens inside DuckDB via
+semi-join on the entity key before rows are transferred to Pandas. The
+full-result `DuckDB -> Pandas -> Series.isin(set)` path is retained only as a
+small-data compatibility path.
+
+**Rationale:**
+Transferring ten million rows to filter them afterwards defeats the purpose
+of compressed membership.
+
+**Version:** v0.3
+
+---
+
+## CS-12 — Provider roles instead of vendor keywords
+
+**Decision:**
+External intelligence integrates through the existing MCP (membership +
+scores) and REMOTE (evidence) provider roles. No vendor-specific keyword
+(e.g. `DEEPSEE`) is added to the language.
+
+**Rationale:**
+The language stays vendor-neutral; connectors are deployment artifacts.
+
+**Version:** v0.3
+
+---
+
+## CS-13 — Context option validation is strict
+
+**Decision:**
+Option names are case-insensitive; unknown options (E150), duplicate options
+(E151), malformed durations (E152), and incompatible combinations (E153-E158)
+are semantic errors. No last-writer-wins, no silent ignoring.
+
+**Rationale:**
+Persisted DDL with silently dropped options produces behavior that diverges
+from the recorded definition.
+
+**Version:** v0.3
+
+---
+
+## CS-14 — `storage = 'auto'` resolution
+
+**Decision:**
+`'auto'` selects Roaring for non-negative integer entity keys, set storage
+otherwise. `'roaring'` on a non-integer key is an error (E157), not a
+fallback.
+
+**Rationale:**
+Explicit requests must not degrade silently; automatic selection covers the
+common case.
+
+**Version:** v0.3
+
+---
+
+## CS-15 — Snapshot-state query behavior
+
+**Decision:**
+Missing or invalidated snapshot: runtime error E200. Stale snapshot: succeed
+with warning W100. Refresh in progress: readers use the current snapshot.
+Failed refresh: last good snapshot stays current, warning W101.
+
+**Rationale:**
+Reads must be predictable under every lifecycle state; silent staleness and
+silent failure are both unacceptable, but availability is preserved.
+
+**Version:** v0.3
+
+---
+
+## CS-16 — TEMPORAL declares event-time semantics
+
+**Decision:**
+`TEMPORAL (column, granularity)` declares the event-time column and history
+resolution. Temporal qualifiers resolve against membership history. `TEMPORAL`
+does not place timestamps inside bitmaps.
+
+**Rationale:**
+Keeps CS-3 intact while giving temporal queries a well-defined data source.
+
+**Version:** v0.3
 
 ---
 
