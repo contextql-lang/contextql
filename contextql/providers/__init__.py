@@ -10,6 +10,7 @@ Reference implementations::
 """
 
 from contextql.providers.base import (
+    EntityFilter,
     MCPProvider,
     MCPResult,
     RemoteProvider,
@@ -25,6 +26,7 @@ __all__ = [
     "MCPResult",
     "RemoteProvider",
     "RemoteResult",
+    "EntityFilter",
     # Concrete implementations
     "FraudDetectionMCP",
     "PriorityMCP",

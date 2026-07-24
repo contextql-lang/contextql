@@ -87,6 +87,12 @@ source_watermark
 next_cursor
 ```
 
+`RemoteProvider.query` also accepts an optional `EntityFilter` containing the
+remote join column and either a bounded ID tuple or a portable `roaring64`
+payload. Context-filtered REMOTE joins require this capability. The DeepSee
+mock rejects evidence outside the requested membership and records requested
+and returned cardinality for trace/audit verification.
+
 A large bitmap is never expanded into a Python list inside the connector or
 executor — it is handed to the membership store in its serialized form and
 validated (size, key bounds, cardinality) before decoding.
@@ -129,6 +135,13 @@ applies them through the membership store's delta path
 - Reject events older than the committed ordering boundary unless the source
   contract explicitly permits correction.
 - Commit the new watermark only after snapshot promotion.
+
+The current split in-memory membership/durable-state implementation publishes
+the snapshot first and then commits the watermark and event IDs. If the state
+commit fails, replay is at least once and converges through idempotent delta
+application. A deployment may claim single-transaction atomicity only when
+snapshot payload, pointer, watermark, and idempotency rows share one durable
+repository transaction.
 
 ## 5. Mock Connector
 

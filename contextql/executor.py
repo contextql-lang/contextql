@@ -13,6 +13,7 @@ from contextql.adapters.duckdb_adapter import DuckDBAdapter
 from contextql.context_ddl import ContextDDLExecutor
 from contextql.context_options import parse_duration_seconds
 from contextql.errors import Severity
+from contextql.snapshot_resolution import resolve_snapshot
 from contextql.semantic import (
     AlterContextModel,
     AnalysisResult,
@@ -49,6 +50,7 @@ class ProviderCall:
     entity_count: int
     elapsed_ms: float
     data_as_of: Optional[str] = None
+    requested_entity_count: Optional[int] = None
 
 
 @dataclass
@@ -96,6 +98,10 @@ class ContextQLExecutor:
         mcp_timeout_ms: int = 30000,
         remote_timeout_ms: int = 30000,
         mcp_timeout_behavior: str = "warn",
+        membership=None,
+        history=None,
+        repository=None,
+        max_intermediate_rows: Optional[int] = None,
     ):
         self.catalog = catalog
         self.adapter = adapter
@@ -106,8 +112,17 @@ class ContextQLExecutor:
         self._mcp_timeout_ms = mcp_timeout_ms
         self._remote_timeout_ms = remote_timeout_ms
         self._mcp_timeout_behavior = mcp_timeout_behavior
+        if max_intermediate_rows is not None and max_intermediate_rows <= 0:
+            raise ValueError("max_intermediate_rows must be positive.")
+        self._max_intermediate_rows = max_intermediate_rows
         self._mcp_result_cache: Dict = {}
-        self.ddl = ContextDDLExecutor(catalog=catalog, adapter=adapter)
+        self.ddl = ContextDDLExecutor(
+            catalog=catalog,
+            adapter=adapter,
+            membership=membership,
+            history=history,
+            repository=repository,
+        )
         self.membership = self.ddl.membership
         self.history = self.ddl.history
 
@@ -160,20 +175,48 @@ class ContextQLExecutor:
         # Clear per-query MCP result cache and init trace
         self._mcp_result_cache = {}
         self._trace = ContextTrace()
+        self._narrowed_members = None
+        self._temporal_scores: Dict[int, Dict[int, float]] = {}
 
         # Snapshot-state gate: E200 for materialized-without-snapshot,
         # W100 for stale snapshots (SPEC section 6).
         self._check_snapshot_states(query)
 
-        # Materialise REMOTE sources before building SQL
-        temp_tables = self._materialize_remote_sources(query)
+        temp_tables: List[str] = []
         member_tables: List[str] = []
         try:
             extra_key_cols = self._collect_extra_key_cols(query)
             context_where = self._prepare_bitmap_pushdown(query, member_tables)
+            has_remote_source = (
+                query.from_table is not None
+                and query.from_table.source_kind == "REMOTE"
+            ) or any(
+                join.table.source_kind == "REMOTE"
+                for join in query.joins
+            )
+            if context_where is None and has_remote_source:
+                self._narrowed_members = (
+                    self._resolve_narrowing_members(query)
+                )
+            if context_where is None:
+                self._guard_unbounded_context_fallback(query)
+            remote_filters = self._plan_remote_entity_filters(query)
+            temp_tables = self._materialize_remote_sources(
+                query, remote_filters
+            )
             base_sql = self._build_base_sql(
                 query, extra_key_cols, context_where=context_where
             )
+            if self._max_intermediate_rows is not None:
+                row_count = self.adapter.count_rows_up_to(
+                    base_sql, self._max_intermediate_rows
+                )
+                if row_count > self._max_intermediate_rows:
+                    raise ValueError(
+                        "[E304] query intermediate result exceeds the "
+                        f"configured limit of {self._max_intermediate_rows} "
+                        "rows; add more selective predicates."
+                    )
             df = self.adapter.execute_df(base_sql)
 
             if query.context_predicates and context_where is None:
@@ -203,7 +246,7 @@ class ContextQLExecutor:
         finally:
             for t in temp_tables + member_tables:
                 try:
-                    self.adapter.conn.unregister(t)
+                    self.adapter.unregister_relation(t)
                 except Exception:
                     pass
 
@@ -213,7 +256,7 @@ class ContextQLExecutor:
 
     def _context_entity_key(self, name: str) -> str:
         """Entity key for a context: catalog entry first, adapter fallback."""
-        entry = self.catalog.contexts.get(name.lower())
+        entry = self.catalog.get_context(name)
         if entry is not None and entry.entity_key_name:
             return entry.entity_key_name
         try:
@@ -226,7 +269,7 @@ class ContextQLExecutor:
             )
 
     def _context_has_score(self, name: str) -> bool:
-        entry = self.catalog.contexts.get(name.lower())
+        entry = self.catalog.get_context(name)
         if entry is not None:
             return entry.has_score
         try:
@@ -236,7 +279,7 @@ class ContextQLExecutor:
 
     def _snapshot_entry(self, name: str):
         """Catalog entry if *name* is a materialized plain context."""
-        entry = self.catalog.contexts.get(name.lower())
+        entry = self.catalog.get_context(name)
         if entry is None:
             return None
         materialization = getattr(entry, "materialization", None)
@@ -256,13 +299,21 @@ class ContextQLExecutor:
                 entry = self._snapshot_entry(ref.name)
                 if entry is None:
                     continue
-                snapshot = self.membership.get_snapshot(ref.name)
-                if snapshot is None:
-                    raise ValueError(
-                        f"[E200] context '{ref.name}' is materialized but "
-                        f"has no current snapshot; run REFRESH CONTEXT "
-                        f"{ref.name}."
-                    )
+                if ref.temporal is not None:
+                    if (
+                        ref.temporal.mode != "VERSION"
+                        and not entry.is_temporal
+                    ):
+                        raise ValueError(
+                            f"[E109] temporal qualifier used on "
+                            f"non-temporal context '{ref.name}'."
+                        )
+                    # Temporal paths resolve an explicit historical state and
+                    # intentionally do not require a current pointer.
+                    self._temporal_members(ref, entry)
+                    continue
+                resolved = resolve_snapshot(entry, self.membership)
+                snapshot = resolved.snapshot
                 stale_after = entry.materialization.stale_after
                 threshold = parse_duration_seconds(stale_after)
                 if threshold is not None:
@@ -282,6 +333,19 @@ class ContextQLExecutor:
                                 hint=f"Run REFRESH CONTEXT {ref.name}.",
                             )
                         )
+                if entry.last_refresh_error:
+                    self._pending_warnings.append(
+                        SemanticDiagnostic(
+                            code="W101",
+                            severity=Severity.WARNING,
+                            message=(
+                                f"context '{ref.name}' last refresh failed; "
+                                f"serving snapshot {snapshot.version}: "
+                                f"{entry.last_refresh_error}"
+                            ),
+                            hint=f"Run REFRESH CONTEXT {ref.name}.",
+                        )
+                    )
 
     def _prepare_bitmap_pushdown(
         self, query: QueryModel, member_tables: List[str]
@@ -303,16 +367,43 @@ class ContextQLExecutor:
         primary_key = table_entry.primary_key_name
 
         entries: Dict[str, object] = {}
+        resolved_snapshots: Dict[str, object] = {}
+        memberships: Dict[int, object] = {}
+        labels: Dict[int, str] = {}
         for pred in query.context_predicates:
             for ref in pred.refs:
-                if ref.source_kind in ("MCP", "REMOTE"):
+                if ref.source_kind == "REMOTE":
                     return None
+                if ref.source_kind == "MCP":
+                    provider_key = self._mcp_entity_keys.get(
+                        ref.name, primary_key
+                    )
+                    if provider_key.lower() != primary_key.lower():
+                        return None
+                    result = self._get_mcp_result(query, pred, ref)
+                    memberships[id(ref)] = result.membership_object()
+                    labels[id(ref)] = f"MCP({ref.name})"
+                    continue
                 entry = self._snapshot_entry(ref.name)
                 if entry is None:
                     return None
                 if entry.entity_key_name.lower() != primary_key.lower():
                     return None
                 entries[ref.name] = entry
+                if ref.temporal is not None:
+                    membership, _, label = self._temporal_members(ref, entry)
+                    memberships[id(ref)] = membership
+                    labels[id(ref)] = label
+                else:
+                    resolved = resolve_snapshot(entry, self.membership)
+                    resolved_snapshots[ref.name] = resolved
+                    memberships[id(ref)] = self.membership.membership_object(
+                        resolved.membership_key, resolved.snapshot.version
+                    )
+                    labels[id(ref)] = (
+                        f"{resolved.entry.qualified_name}"
+                        f"@v{resolved.snapshot.version}"
+                    )
 
         # key_qualifier/primary_key come from developer-registered catalog
         # state, not runtime data. Note for future multi-tenant sandboxing:
@@ -320,13 +411,23 @@ class ContextQLExecutor:
         # validation must be added here before restricted execution modes.
         key_qualifier = query.from_table.alias or query.from_table.name
         clauses: List[str] = []
+        narrowed_memberships: List[object] = []
+        narrowing_safe = True
         for index, pred in enumerate(query.context_predicates):
             names = [ref.name for ref in pred.refs]
             intersect = bool(pred.all_mode or pred.sequence_mode)
-            member_array = self._compose_member_array(names, intersect)
+            composed_members = self._compose_memberships(
+                [memberships[id(ref)] for ref in pred.refs],
+                intersect,
+            )
+            if pred.negated:
+                narrowing_safe = False
+            else:
+                narrowed_memberships.append(composed_members)
             table_name = f"__cql_members_{index}"
-            self.adapter.conn.register(
-                table_name, pd.DataFrame({"entity_id": member_array})
+            self.adapter.register_member_batches(
+                table_name,
+                self._iter_value_batches(composed_members),
             )
             member_tables.append(table_name)
             operator = "NOT IN" if pred.negated else "IN"
@@ -334,37 +435,352 @@ class ContextQLExecutor:
                 f"{key_qualifier}.{primary_key} {operator} "
                 f"(SELECT entity_id FROM {table_name})"
             )
-            for name in names:
-                version = self.membership.get_snapshot(name).version
-                label = f"{name}@v{version}"
+            for ref in pred.refs:
+                label = labels[id(ref)]
                 if label not in self._trace.contexts_resolved:
                     self._trace.contexts_resolved.append(label)
 
+        if narrowing_safe and narrowed_memberships:
+            narrowed = narrowed_memberships[0]
+            for candidate in narrowed_memberships[1:]:
+                try:
+                    narrowed = narrowed & candidate
+                except TypeError:
+                    narrowed = set(narrowed) & set(candidate)
+            self._narrowed_members = narrowed
+        else:
+            self._narrowed_members = None
         return " AND ".join(clauses)
 
-    def _compose_member_array(
-        self, names: List[str], intersect: bool
-    ) -> "np.ndarray":
-        """Compose snapshot memberships without Python-set expansion when
-        the store supports bitmap-native algebra."""
+    def _compose_members(self, names: List[str], intersect: bool):
+        """Compose snapshots while retaining their native representation."""
         if hasattr(self.membership, "compose"):
             if intersect:
-                bitmap = self.membership.compose(intersect_of=names)
-            else:
-                bitmap = self.membership.compose(union_of=names)
-            return np.asarray(bitmap.to_array(), dtype="int64")
-        members = (
+                return self.membership.compose(intersect_of=names)
+            return self.membership.compose(union_of=names)
+        return (
             self.membership.intersect(names)
             if intersect
             else self.membership.union(names)
         )
-        return np.fromiter(members, dtype="int64", count=len(members))
+
+    @staticmethod
+    def _compose_memberships(values: List[object], intersect: bool):
+        if not values:
+            return set()
+        result = values[0]
+        for candidate in values[1:]:
+            try:
+                result = (
+                    result & candidate if intersect
+                    else result | candidate
+                )
+            except TypeError:
+                result = (
+                    set(result) & set(candidate) if intersect
+                    else set(result) | set(candidate)
+                )
+        return result
+
+    def _resolve_narrowing_members(self, query: QueryModel):
+        """Resolve a safe pre-join membership bound for REMOTE pushdown."""
+        if not query.context_predicates:
+            return None
+        predicate_memberships = []
+        for pred in query.context_predicates:
+            if pred.negated:
+                return None
+            ref_memberships = []
+            for ref in pred.refs:
+                if ref.source_kind == "REMOTE":
+                    return None
+                if ref.source_kind == "MCP":
+                    result = self._get_mcp_result(query, pred, ref)
+                    ref_memberships.append(result.membership_object())
+                    continue
+                entry = self._snapshot_entry(ref.name)
+                if entry is not None:
+                    if ref.temporal is not None:
+                        values, _, _ = self._temporal_members(ref, entry)
+                    else:
+                        resolved = resolve_snapshot(
+                            entry, self.membership
+                        )
+                        values = self.membership.membership_object(
+                            resolved.membership_key,
+                            resolved.snapshot.version,
+                        )
+                else:
+                    values = self.adapter.resolve_context_keys(ref.name)
+                ref_memberships.append(values)
+            predicate_memberships.append(
+                self._compose_memberships(
+                    ref_memberships,
+                    bool(pred.all_mode or pred.sequence_mode),
+                )
+            )
+        return self._compose_memberships(predicate_memberships, True)
+
+    def _guard_unbounded_context_fallback(self, query: QueryModel) -> None:
+        """Fail before base materialization for unsafe membership fallback."""
+        for pred in query.context_predicates:
+            for ref in pred.refs:
+                if ref.source_kind == "MCP":
+                    result = self._get_mcp_result(query, pred, ref)
+                    if result.cardinality > 10_000:
+                        raise ValueError(
+                            "[E303] large MCP membership requires a "
+                            "pushdown-compatible registered primary key."
+                        )
+                    continue
+                if ref.source_kind == "REMOTE":
+                    continue
+                entry = self._snapshot_entry(ref.name)
+                if entry is not None:
+                    resolved = resolve_snapshot(entry, self.membership)
+                    membership = self.membership.membership_object(
+                        resolved.membership_key,
+                        resolved.snapshot.version,
+                    )
+                    if len(membership) <= 10_000:
+                        continue
+                    raise ValueError(
+                        "[E303] large materialized context membership cannot "
+                        "use the unbounded DataFrame fallback; register a "
+                        "matching table primary key."
+                    )
+
+    @staticmethod
+    def _parse_temporal_value(value: str):
+        from datetime import datetime, timezone
+
+        text = value.strip().strip("'").strip('"')
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError(
+                "Temporal timestamps must include an explicit timezone."
+            )
+        return parsed.astimezone(timezone.utc)
+
+    def _temporal_members(self, ref, entry):
+        from contextql.temporal import floor_utc
+
+        qualifier = ref.temporal
+        assert qualifier is not None
+        if qualifier.mode == "VERSION":
+            resolved = resolve_snapshot(
+                entry, self.membership, version=qualifier.version
+            )
+            members = self.membership.membership_object(
+                resolved.membership_key, resolved.snapshot.version
+            )
+            scores = self.membership.scores(
+                resolved.membership_key, resolved.snapshot.version
+            )
+            label = (
+                f"{entry.qualified_name}@VERSION "
+                f"{resolved.snapshot.version}"
+            )
+        else:
+            context_id = entry.context_id
+            if qualifier.mode == "AT":
+                start = end = floor_utc(
+                    self._parse_temporal_value(
+                        qualifier.at_value or ""
+                    ),
+                    entry.temporal_granularity,
+                )
+            else:
+                start = floor_utc(
+                    self._parse_temporal_value(
+                        qualifier.start_value or ""
+                    ),
+                    entry.temporal_granularity,
+                )
+                end = floor_utc(
+                    self._parse_temporal_value(
+                        qualifier.end_value or ""
+                    ),
+                    entry.temporal_granularity,
+                )
+                if start > end:
+                    raise ValueError(
+                        "[E203] temporal range start must not be after end."
+                    )
+            if (
+                entry.history_available_from is not None
+                and start < entry.history_available_from
+            ):
+                raise ValueError(
+                    f"[E202] requested time predates retained history for "
+                    f"context '{entry.qualified_name}'."
+                )
+            anchor_members = ()
+            anchor_scores = {}
+            anchor_time = None
+            if entry.history_available_from is not None:
+                anchor = self.membership.get_snapshot_at(
+                    context_id, start
+                )
+                if anchor is not None:
+                    anchor_members = self.membership.membership_object(
+                        context_id, anchor.version
+                    )
+                    anchor_scores = self.membership.scores(
+                        context_id, anchor.version
+                    )
+                    anchor_time = anchor.data_as_of
+            if qualifier.mode == "AT":
+                members, scores = self.history.state_at(
+                    context_id,
+                    end,
+                    anchor_members=anchor_members,
+                    anchor_scores=anchor_scores,
+                    anchor_time=anchor_time,
+                )
+                label = f"{entry.qualified_name}@{end.isoformat()}"
+            else:
+                members, scores = self.history.state_between(
+                    context_id,
+                    start,
+                    end,
+                    anchor_members=anchor_members,
+                    anchor_scores=anchor_scores,
+                    anchor_time=anchor_time,
+                )
+                label = (
+                    f"{entry.qualified_name}@{start.isoformat()}"
+                    f"..{end.isoformat()}"
+                )
+        self._temporal_scores[id(ref)] = scores
+        return members, scores, label
+
+    @staticmethod
+    def _iter_value_batches(values, batch_size: int = 65_536):
+        import itertools
+
+        iterator = iter(values)
+        while True:
+            batch = tuple(itertools.islice(iterator, batch_size))
+            if not batch:
+                return
+            yield batch
 
     # ---------------------------------------------------------
     # REMOTE source materialisation
     # ---------------------------------------------------------
 
-    def _materialize_remote_sources(self, query: QueryModel) -> List[str]:
+    def _plan_remote_entity_filters(self, query: QueryModel) -> Dict[str, object]:
+        """Create bounded filters for context-narrowed REMOTE equality joins."""
+        from contextql.providers import EntityFilter
+        import re
+
+        remote_joins = [
+            join for join in query.joins
+            if join.table.source_kind == "REMOTE"
+        ]
+        if not remote_joins:
+            return {}
+        if not query.context_predicates:
+            return {}
+        members = getattr(self, "_narrowed_members", None)
+        if members is None:
+            raise ValueError(
+                "[E301] REMOTE join cannot be safely narrowed by the "
+                "context predicate."
+            )
+        if query.from_table is None or query.from_table.source_kind == "REMOTE":
+            raise ValueError(
+                "[E301] context-narrowed REMOTE queries require a local "
+                "base table."
+            )
+        local_alias = query.from_table.alias or query.from_table.name
+        filters: Dict[str, object] = {}
+        for join in remote_joins:
+            remote_alias = join.table.alias or join.table.name
+            condition = join.condition or ""
+            left = re.search(
+                rf"\b{re.escape(local_alias)}\s*\.\s*"
+                r"([A-Za-z_][A-Za-z0-9_]*)"
+                rf"\s*=\s*{re.escape(remote_alias)}\s*\.\s*"
+                r"([A-Za-z_][A-Za-z0-9_]*)\b",
+                condition,
+                re.IGNORECASE,
+            )
+            right = re.search(
+                rf"\b{re.escape(remote_alias)}\s*\.\s*"
+                r"([A-Za-z_][A-Za-z0-9_]*)"
+                rf"\s*=\s*{re.escape(local_alias)}\s*\.\s*"
+                r"([A-Za-z_][A-Za-z0-9_]*)\b",
+                condition,
+                re.IGNORECASE,
+            )
+            if left:
+                remote_column = left.group(2)
+            elif right:
+                remote_column = right.group(1)
+            else:
+                raise ValueError(
+                    "[E301] REMOTE context join must be an entity-key "
+                    "equality join."
+                )
+            if len(members) <= 10_000:
+                entity_filter = EntityFilter(
+                    column=remote_column,
+                    entity_ids=tuple(int(value) for value in members),
+                )
+            else:
+                try:
+                    from pyroaring import BitMap64
+                except ImportError as exc:
+                    raise ValueError(
+                        "[E162] large REMOTE entity filters require "
+                        "contextql[roaring]."
+                    ) from exc
+                membership_payload = (
+                    members.serialize()
+                    if hasattr(members, "serialize")
+                    else BitMap64(
+                        int(value) for value in members
+                    ).serialize()
+                )
+                entity_filter = EntityFilter(
+                    column=remote_column,
+                    membership_bitmap=membership_payload,
+                    bitmap_encoding="roaring64",
+                )
+            filters[remote_alias] = entity_filter
+        return filters
+
+    def _remote_projection_columns(
+        self, query: QueryModel, alias: str, join_column: str
+    ) -> List[str]:
+        import re
+
+        columns = {join_column}
+        texts = list(query.projections)
+        texts.extend(
+            join.condition or "" for join in query.joins
+        )
+        if query.where_text:
+            texts.append(query.where_text)
+        for item in query.order_items:
+            if item.column_name:
+                texts.append(item.column_name)
+        pattern = re.compile(
+            rf"\b{re.escape(alias)}\s*\.\s*"
+            r"([A-Za-z_][A-Za-z0-9_]*)\b",
+            re.IGNORECASE,
+        )
+        for text in texts:
+            columns.update(pattern.findall(text))
+        return sorted(columns)
+
+    def _materialize_remote_sources(
+        self,
+        query: QueryModel,
+        entity_filters: Optional[Dict[str, object]] = None,
+    ) -> List[str]:
         """Fetch REMOTE table refs and register them as DuckDB views.
 
         Returns the list of registered temp names so the caller can unregister
@@ -397,18 +813,45 @@ class ContextQLExecutor:
                     "that reference it."
                 )
 
+            remote_alias = ref.alias or ref.name
+            entity_filter = (entity_filters or {}).get(remote_alias)
+            columns = (
+                self._remote_projection_columns(
+                    query, remote_alias, entity_filter.column
+                )
+                if entity_filter is not None else []
+            )
+            if entity_filter is not None:
+                import inspect
+                signature = inspect.signature(provider.query)
+                accepts_filter = (
+                    "entity_filter" in signature.parameters
+                    or any(
+                        parameter.kind
+                        == inspect.Parameter.VAR_KEYWORD
+                        for parameter in signature.parameters.values()
+                    )
+                )
+                if not accepts_filter:
+                    raise ValueError(
+                        f"[E302] REMOTE provider '{provider_name}' does not "
+                        "support required entity filtering."
+                    )
+
             from concurrent.futures import ThreadPoolExecutor
             from concurrent.futures import TimeoutError as FuturesTimeoutError
 
             _remote_t0 = __import__('time').perf_counter()
             with ThreadPoolExecutor(max_workers=1) as ex:
-                future = ex.submit(
-                    provider.query,
-                    resource=resource,
-                    filters={},
-                    columns=[],
-                    limit=None,
-                )
+                call_kwargs = {
+                    "resource": resource,
+                    "filters": {},
+                    "columns": columns,
+                    "limit": None,
+                }
+                if entity_filter is not None:
+                    call_kwargs["entity_filter"] = entity_filter
+                future = ex.submit(provider.query, **call_kwargs)
                 try:
                     remote_result = future.result(
                         timeout=self._remote_timeout_ms / 1000
@@ -427,6 +870,10 @@ class ContextQLExecutor:
                     provider_type="REMOTE",
                     entity_count=len(remote_df),
                     elapsed_ms=_remote_elapsed,
+                    requested_entity_count=(
+                        entity_filter.cardinality
+                        if entity_filter is not None else None
+                    ),
                 ))
             temp_name = f"__remote_{provider_name}_{resource.replace('.', '_')}"
             self.adapter.conn.register(temp_name, remote_df)
@@ -789,6 +1236,75 @@ class ContextQLExecutor:
             f"identity map with Engine.register_identity_map()."
         )
 
+    def _get_mcp_result(self, query, pred, ref):
+        """Resolve and cache MCP membership before REMOTE materialisation."""
+        import warnings
+        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+        provider = self._mcp_providers.get(ref.name)
+        if provider is None:
+            raise ValueError(
+                f"MCP provider '{ref.name}' is not registered. "
+                "Call register_mcp_provider() before executing queries "
+                "that reference it."
+            )
+        entity_type = pred.binding_alias or (
+            query.from_table.name if query.from_table else ""
+        )
+        params = {p.name: p.value for p in ref.parameters}
+        cache_key = (ref.name, entity_type, frozenset(params.items()))
+        if cache_key in self._mcp_result_cache:
+            return self._mcp_result_cache[cache_key]
+
+        started = __import__("time").perf_counter()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                provider.resolve,
+                entity_type=entity_type,
+                params=params,
+                limit=None,
+            )
+            try:
+                result = future.result(
+                    timeout=self._mcp_timeout_ms / 1000
+                )
+            except FuturesTimeoutError:
+                if self._mcp_timeout_behavior == "error":
+                    raise RuntimeError(
+                        f"MCP provider '{ref.name}' timed out after "
+                        f"{self._mcp_timeout_ms}ms"
+                    )
+                warnings.warn(
+                    f"MCP provider '{ref.name}' timed out after "
+                    f"{self._mcp_timeout_ms}ms, returning empty result",
+                    stacklevel=4,
+                )
+                from contextql.providers import MCPResult
+                result = MCPResult(
+                    entity_type=entity_type, entity_ids=[]
+                )
+        if result.entity_type != entity_type:
+            raise ValueError(
+                f"MCP provider '{ref.name}' returned entity_type "
+                f"'{result.entity_type}' but query expected "
+                f"'{entity_type}'."
+            )
+        self._mcp_result_cache[cache_key] = result
+        if hasattr(self, "_trace"):
+            self._trace.provider_calls.append(
+                ProviderCall(
+                    provider_name=ref.name,
+                    provider_type="MCP",
+                    entity_count=result.cardinality,
+                    elapsed_ms=(
+                        __import__("time").perf_counter() - started
+                    ) * 1000,
+                    data_as_of=getattr(result, "data_as_of", None),
+                )
+            )
+        return result
+
     def _evaluate_single_context(
         self,
         df: pd.DataFrame,
@@ -855,11 +1371,7 @@ class ContextQLExecutor:
                     self._trace.provider_calls.append(ProviderCall(
                         provider_name=ref.name,
                         provider_type="MCP",
-                        entity_count=(
-                            len(mcp_result.entity_ids)
-                            if mcp_result.entity_ids is not None
-                            else len(mcp_result.membership_array())
-                        ),
+                        entity_count=mcp_result.cardinality,
                         elapsed_ms=_mcp_elapsed,
                         data_as_of=getattr(mcp_result, 'data_as_of', None),
                     ))
@@ -867,10 +1379,7 @@ class ContextQLExecutor:
             mcp_result = self._mcp_result_cache[cache_key]
             # ID-list results become sets; bitmap results stay as NumPy
             # arrays — never expanded into Python objects (plan 8.2).
-            if mcp_result.entity_ids is not None:
-                entity_ids = set(mcp_result.entity_ids)
-            else:
-                entity_ids = mcp_result.membership_array()
+            entity_ids = mcp_result.membership_object()
             key_col = self._resolve_mcp_key_column(df, query, pred, ref.name)
             # Record context in trace
             _mcp_label = f"MCP({ref.name})"
@@ -887,12 +1396,22 @@ class ContextQLExecutor:
         # Snapshot-backed contexts read the membership store, not the
         # definition SQL (plan 7.4); others resolve live via the adapter.
         snapshot = None
-        if self._snapshot_entry(ref.name) is not None:
-            snapshot = self.membership.get_snapshot(ref.name)
-        if snapshot is not None:
-            context_keys = self.membership.members(ref.name)
-            label = f"{ref.name}@v{snapshot.version}"
+        entry = self._snapshot_entry(ref.name)
+        if entry is not None and ref.temporal is not None:
+            context_keys, _, label = self._temporal_members(ref, entry)
+            resolved = None
         else:
+            resolved = (
+                resolve_snapshot(entry, self.membership)
+                if entry is not None else None
+            )
+        if resolved is not None:
+            snapshot = resolved.snapshot
+            context_keys = self.membership.members(
+                resolved.membership_key, snapshot.version
+            )
+            label = f"{entry.qualified_name}@v{snapshot.version}"
+        elif entry is None or ref.temporal is None:
             context_keys = self.adapter.resolve_context_keys(ref.name)
             label = ref.name
         # Record native context in trace
@@ -993,12 +1512,19 @@ class ContextQLExecutor:
                     if self._context_has_score(ref.name):
                         # Snapshot scores are attached after membership
                         # narrowing (plan 7.4); live evaluation otherwise.
-                        if (
-                            self._snapshot_entry(ref.name) is not None
-                            and self.membership.get_snapshot(ref.name)
-                            is not None
-                        ):
-                            score_map = self.membership.scores(ref.name)
+                        entry = self._snapshot_entry(ref.name)
+                        if ref.temporal is not None:
+                            score_map = self._temporal_scores.get(
+                                id(ref), {}
+                            )
+                        elif entry is not None:
+                            resolved = resolve_snapshot(
+                                entry, self.membership
+                            )
+                            score_map = self.membership.scores(
+                                resolved.membership_key,
+                                resolved.snapshot.version,
+                            )
                         else:
                             score_map = self.adapter.resolve_context_score_map(ref.name)
                         score_values = df[key_col].map(score_map).fillna(0.0)
@@ -1103,9 +1629,25 @@ class ContextQLExecutor:
                 ascending = (item.direction or "DESC").upper() == "ASC"
                 if "__context_score" not in df.columns:
                     return df
+                by = ["__context_score", "__context_count"]
+                ascending_flags = [
+                    ascending,
+                    False if not ascending else True,
+                ]
+                for secondary in query.order_items:
+                    if secondary.is_context_order:
+                        continue
+                    column = secondary.column_name
+                    if column and column in df.columns:
+                        by.append(column)
+                        ascending_flags.append(
+                            (secondary.direction or "ASC").upper()
+                            == "ASC"
+                        )
                 return df.sort_values(
-                    by=["__context_score", "__context_count"],
-                    ascending=[ascending, False if not ascending else True],
+                    by=by,
+                    ascending=ascending_flags,
+                    kind="mergesort",
                 )
 
         # Plain column ordering (result row order is not guaranteed by the

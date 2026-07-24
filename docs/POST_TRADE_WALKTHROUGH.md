@@ -27,9 +27,9 @@ pip install -e "../contextql[executor,roaring]" -e ".[dev]"
 python demo/post_trade_demo.py                       # ten demo scenarios
 ```
 
-Both default to 10,000,000 rows (`--rows` to change). The demo completes in
-about 30 seconds on a developer machine; see `docs/benchmarks/` for measured
-numbers with environment details.
+Both default to 10,000,000 rows (`--rows` to change). Runtime is
+machine-specific; see `docs/benchmarks/` for the clean-commit measurement and
+environment details.
 
 ## What happens under the hood
 
@@ -75,12 +75,15 @@ LIMIT 20;
 
 ## Measured results (10M rows, see docs/benchmarks/)
 
-- Generation: 26.8 s, 854 MB on disk
-- Cold materialization: ~0.26 s per context; 9/9 bitmap counts match
+- Generation: 86.29 s, 855.1 MB on disk
+- Cold materialization: 0.935 s average per context; 9/9 bitmap counts match
   reference SQL exactly
-- Bitmap algebra: 0.2-0.7 ms (~370x faster than rebuilding membership)
-- Warm top-20 intervention query: 293 ms with snapshot pushdown
-- Peak RSS: 1.45 GB
+- Bitmap algebra: 0.447-18.865 ms in the measured run
+- Warm top-20 intervention query: 753 ms with snapshot pushdown and exact SQL
+  match
+- Connector/native REMOTE narrowing: 46,703 requested IDs, exact reference
+  match, `roaring64`
+- Peak RSS: 1,270.4 MB
 
 ## Boundaries
 

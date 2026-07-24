@@ -136,6 +136,16 @@ def validate_context_options(ctx: "ContextDefinitionModel") -> List["SemanticDia
             f"refresh_mode = 'incremental' on context '{ctx.name}' "
             "requires source_watermark.",
         )
+    elif refresh_mode == "incremental" and ctx.definition_sql is not None:
+        err(
+            "E161",
+            f"incremental refresh is unsupported for native SQL context "
+            f"'{ctx.name}'; arbitrary SQL cannot infer removals safely.",
+            hint=(
+                "Use refresh_mode = 'manual' or 'scheduled', or supply "
+                "membership through a connector change feed."
+            ),
+        )
     if "history_retention" in options and history is not True:
         err(
             "E155",

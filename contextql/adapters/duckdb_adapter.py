@@ -41,6 +41,11 @@ class DuckDBAdapter:
     # ---------------------------------------------------------
 
     def register_table(self, name: str, df: pd.DataFrame) -> None:
+        if name in self._tables:
+            try:
+                self.conn.unregister(name)
+            except Exception:
+                pass
         self._tables[name] = df
         self.conn.register(name, df)
 
@@ -139,6 +144,59 @@ class DuckDBAdapter:
 
     def execute_df(self, sql: str) -> pd.DataFrame:
         return self.conn.execute(sql).df()
+
+    def count_rows_up_to(self, sql: str, maximum: int) -> int:
+        """Count at most ``maximum + 1`` rows without materializing them."""
+        bounded = int(maximum) + 1
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM ("
+            f"SELECT 1 FROM ({sql}) AS __cql_source LIMIT {bounded}"
+            ") AS __cql_bounded"
+        ).fetchone()
+        return int(row[0])
+
+    def execute_batches(self, sql: str, batch_size: int = 65_536):
+        """Yield bounded DataFrames from one DuckDB execution."""
+        cursor = self.conn.execute(sql)
+        columns = [description[0] for description in cursor.description]
+        while True:
+            rows = cursor.fetchmany(batch_size)
+            if not rows:
+                break
+            yield pd.DataFrame.from_records(rows, columns=columns)
+
+    def register_member_batches(self, name: str, batches) -> None:
+        """Create a temporary member relation from bounded ID batches."""
+        self.conn.execute(
+            f'CREATE TEMP TABLE "{name}" (entity_id BIGINT)'
+        )
+        batch_relation = f"{name}__batch"
+        try:
+            for batch in batches:
+                frame = pd.DataFrame(
+                    {"entity_id": batch}, dtype="int64"
+                )
+                self.conn.register(batch_relation, frame)
+                try:
+                    self.conn.execute(
+                        f'INSERT INTO "{name}" '
+                        f'SELECT entity_id FROM "{batch_relation}"'
+                    )
+                finally:
+                    self.conn.unregister(batch_relation)
+        except Exception:
+            self.conn.execute(f'DROP TABLE IF EXISTS "{name}"')
+            raise
+
+    def unregister_relation(self, name: str) -> None:
+        try:
+            self.conn.unregister(name)
+        except Exception:
+            pass
+        try:
+            self.conn.execute(f'DROP TABLE IF EXISTS "{name}"')
+        except Exception:
+            self.conn.execute(f'DROP VIEW IF EXISTS "{name}"')
 
     def execute(self, sql: str):
         return self.conn.execute(sql)

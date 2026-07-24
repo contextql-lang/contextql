@@ -27,3 +27,24 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v
+
+  benchmark-correctness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install benchmark dependencies
+        run: pip install -e ".[dev,executor,roaring]"
+      - name: Run 100K correctness benchmark
+        run: >-
+          python benchmarks/post_trade_benchmark.py
+          --rows 100000
+          --db post-trade-100k.duckdb
+          --output post-trade-100k.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: post-trade-100k
+          path: post-trade-100k.json

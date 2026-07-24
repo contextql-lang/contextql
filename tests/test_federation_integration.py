@@ -45,11 +45,21 @@ class TrackingREMOTE:
         self.last_resource = None
         self.last_filters = None
 
-    def query(self, resource, filters, columns, limit=None):
+    def query(
+        self, resource, filters, columns, limit=None, *, entity_filter=None
+    ):
         self.call_count += 1
         self.last_resource = resource
         self.last_filters = filters
-        return RemoteResult(rows=self._rows)
+        self.last_entity_filter = entity_filter
+        rows = self._rows
+        if entity_filter is not None:
+            allowed = set(entity_filter.ids())
+            rows = [
+                row for row in rows
+                if row.get(entity_filter.column) in allowed
+            ]
+        return RemoteResult(rows=rows)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -114,14 +124,15 @@ class TestMCPRemoteSeparation:
         assert "jira_status" in df.columns
         assert "priority" in df.columns
 
-        # REMOTE provider received no filtering (fetched all 5 rows)
+        # REMOTE provider received the composed MCP membership bound.
         assert remote.call_count == 1
         assert remote.last_filters == {}
+        assert set(remote.last_entity_filter.ids()) == {1, 4}
 
         # MCP provider was called once
         assert mcp.call_count == 1
 
-    def test_remote_receives_no_membership_filter(self, engine):
+    def test_remote_receives_membership_filter(self, engine):
         """REMOTE provider gets the full table — filtering happens in engine."""
         mcp = TrackingMCP(entity_ids=[2], scores=[0.5])
         remote = TrackingREMOTE(rows=[
@@ -143,8 +154,8 @@ class TestMCPRemoteSeparation:
         df = result.to_pandas()
         # Only invoice 2 survives MCP filter
         assert df["invoice_id"].tolist() == [2]
-        # But REMOTE returned all 5 rows (no pushdown)
         assert remote.call_count == 1
+        assert tuple(remote.last_entity_filter.ids()) == (2,)
 
     def test_combined_mcp_and_native_context(self, engine):
         """MCP and native SQL contexts compose via union."""
@@ -206,7 +217,8 @@ class TestExecutionTrace:
         remote_calls = [c for c in trace.provider_calls if c.provider_type == "REMOTE"]
         assert len(remote_calls) == 1
         assert remote_calls[0].provider_name == "tracker"
-        assert remote_calls[0].entity_count == 5
+        assert remote_calls[0].entity_count == 4
+        assert remote_calls[0].requested_entity_count == 4
 
     def test_trace_captures_native_contexts(self, engine):
         result = engine.execute("""

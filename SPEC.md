@@ -333,6 +333,43 @@ temporal qualifiers (`AT`, `BETWEEN`), which are resolved against recorded
 membership history — not against timestamps embedded in a bitmap. A bitmap
 never contains per-member timestamps or evidence.
 
+### Hardening semantics
+
+`context_name AT VERSION <positive-integer>` selects an immutable snapshot
+version directly. `AT <timestamp>` resolves membership and score at one UTC
+event-time instant. `BETWEEN <start> AND <end>` returns entities that were
+members at any instant in the inclusive interval and uses the maximum score
+observed while each entity was a member. Timestamps require an explicit
+timezone. Requests older than retained history fail with E202; reversed ranges
+fail with E203.
+
+For native SQL definitions, `manual` performs a full refresh on
+`REFRESH CONTEXT`, and `scheduled` asks the server scheduler to perform that
+same full refresh at `refresh_interval`. Native `incremental` definitions fail
+with E161 because arbitrary result SQL cannot infer removals safely.
+Connector-managed contexts may use `incremental` when their provider supplies
+an ordered, idempotent change feed.
+
+`source_watermark` names a projected result column. A successful native
+refresh stores its maximum observed non-null value, never the configured
+column name.
+
+An ordinary materialized query uses a snapshot only when its context ID,
+snapshot version, definition hash, state, and payload checksum match the
+catalog's current pointer. Definition replacement invalidates that pointer and
+ordinary queries fail with E200 until refresh. Rename retains the immutable
+context ID and snapshot pointer. Drop/recreate creates a new context ID.
+
+When a context-filtered local table is equality-joined to a REMOTE resource,
+context algebra executes first and the surviving entity membership is passed
+to the provider as an entity filter. An unsafe join fails with E301; a provider
+without entity-filter support fails with E302.
+
+A large materialized or MCP membership that cannot be pushed into the local
+relation fails with E303 before the base result is materialized. Runtimes may
+also configure an intermediate-row ceiling; exceeding it fails with E304
+before a DataFrame or equivalent in-memory result is allocated.
+
 ---
 
 ## 7. ALTER CONTEXT
@@ -495,6 +532,7 @@ Entity key compatibility is enforced: a context with key type `VARCHAR` cannot b
 | E001 - E099 | Syntax errors |
 | E100 - E199 | Semantic errors |
 | E200 - E299 | Runtime errors |
+| E300 - E399 | Bounded execution and federation errors |
 | W001 - W499 | Warnings |
 
 Codes assigned by this specification:
@@ -503,6 +541,9 @@ Codes assigned by this specification:
   duration; E153 - E158 invalid option combinations (section 6); E159 DROP
   RESTRICT dependency violation (section 8)
 - E200 membership snapshot missing or invalidated (section 6)
+- E301 unsafe REMOTE narrowing; E302 provider lacks required entity filtering;
+  E303 unsafe large-membership fallback; E304 intermediate row ceiling
+  exceeded (section 6)
 - W100 stale snapshot; W101 last refresh failed (section 6)
 
 See `contextql/errors.py` for the full registry and `docs/TOOLING.md` for the implemented lint rules.

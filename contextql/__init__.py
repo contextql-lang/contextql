@@ -173,6 +173,11 @@ class Engine:
         mcp_timeout_ms: int = 30000,
         remote_timeout_ms: int = 30000,
         mcp_timeout_behavior: str = "warn",
+        default_namespace: str = "default",
+        catalog_repository=None,
+        membership_store=None,
+        history_store=None,
+        max_intermediate_rows: Optional[int] = None,
     ) -> None:
         from contextql.adapters.duckdb_adapter import DuckDBAdapter
         from contextql.semantic import InMemoryCatalog
@@ -183,7 +188,14 @@ class Engine:
             database = database[len("duckdb://"):]
 
         self._adapter = DuckDBAdapter(database=database)
-        self._catalog = InMemoryCatalog()
+        from contextql.catalog_repository import InMemoryCatalogRepository
+        self._catalog = InMemoryCatalog(
+            default_namespace=default_namespace
+        )
+        self._catalog_repository = (
+            catalog_repository if catalog_repository is not None
+            else InMemoryCatalogRepository()
+        )
         self._mcp_providers: dict = {}
         self._mcp_entity_keys: dict = {}
         self._remote_providers: dict = {}
@@ -198,6 +210,26 @@ class Engine:
             mcp_timeout_ms=mcp_timeout_ms,
             remote_timeout_ms=remote_timeout_ms,
             mcp_timeout_behavior=mcp_timeout_behavior,
+            membership=membership_store,
+            history=history_store,
+            repository=self._catalog_repository,
+            max_intermediate_rows=max_intermediate_rows,
+        )
+        for entry in self._catalog_repository.load_contexts():
+            self._catalog.put_context(entry)
+            membership_key = entry.context_id
+            if hasattr(self._executor.membership, "register_alias"):
+                self._executor.membership.register_alias(
+                    entry.qualified_name, membership_key
+                )
+            if hasattr(self._executor.history, "register_alias"):
+                self._executor.history.register_alias(
+                    entry.qualified_name, membership_key
+                )
+            if entry.definition_sql is not None:
+                self._executor.ddl._register_with_adapter(entry)
+        self._catalog_repository.hydrate_runtime(
+            self._executor.membership, self._executor.history
         )
 
     # ---------------------------------------------------------
@@ -263,9 +295,27 @@ class Engine:
             score_column_name=score_column,
             replace=replace,
         )
+        from contextql.context_names import qualify_context_name
         from contextql.semantic import ContextCatalogEntry
-        entry = ContextCatalogEntry(name=name, entity_key_name=entity_key, has_score=has_score)
-        self._catalog.contexts[name.lower()] = entry
+        qualified = qualify_context_name(
+            name, default_namespace=self._catalog.default_namespace
+        )
+        entry = ContextCatalogEntry(
+            name=qualified.name,
+            namespace=qualified.namespace,
+            entity_key_name=entity_key,
+            has_score=has_score,
+        )
+        self._catalog.put_context(entry)
+        membership_key = entry.context_id or entry.qualified_name
+        if hasattr(self._executor.membership, "register_alias"):
+            self._executor.membership.register_alias(
+                entry.qualified_name, membership_key
+            )
+        if hasattr(self._executor.history, "register_alias"):
+            self._executor.history.register_alias(
+                entry.qualified_name, membership_key
+            )
 
     def register_snapshot_context(
         self,
@@ -297,19 +347,34 @@ class Engine:
             )
         except ValueError:
             key_type = EntityKeyType.UNKNOWN
+        from contextql.context_names import qualify_context_name
+        qualified = qualify_context_name(
+            name, default_namespace=self._catalog.default_namespace
+        )
         entry = ContextCatalogEntry(
-            name=name,
+            name=qualified.name,
+            namespace=qualified.namespace,
             entity_key_name=entity_key,
             entity_key_type=key_type,
             has_score=has_score,
             lifecycle_state="active",
+            source_kind="connector",
             materialization=MaterializationSettings(
                 materialized=True,
                 storage="roaring",
                 refresh_mode="incremental",
             ),
         )
-        self._catalog.contexts[name.lower()] = entry
+        self._catalog.put_context(entry)
+        membership_key = entry.context_id or entry.qualified_name
+        if hasattr(self._executor.membership, "register_alias"):
+            self._executor.membership.register_alias(
+                entry.qualified_name, membership_key
+            )
+        if hasattr(self._executor.history, "register_alias"):
+            self._executor.history.register_alias(
+                entry.qualified_name, membership_key
+            )
 
     @property
     def membership(self):
@@ -577,6 +642,7 @@ def load_ipython_extension(ip) -> None:
 # ============================================================
 
 from contextql.providers import (
+    EntityFilter,
     MCPProvider,
     MCPResult,
     RemoteProvider,
@@ -597,6 +663,7 @@ __all__ = [
     "MCPResult",
     "RemoteProvider",
     "RemoteResult",
+    "EntityFilter",
     "FraudDetectionMCP",
     "PriorityMCP",
     "JiraRemoteProvider",
@@ -613,7 +680,7 @@ def _get_builder_class():
 # ============================================================
 
 
-def demo() -> Engine:
+def demo(**engine_kwargs) -> Engine:
     """Return a pre-loaded Engine with sample operational data.
 
     Tables registered:
@@ -793,7 +860,7 @@ def demo() -> Engine:
     })
 
     # ── Build engine ──────────────────────────────────────────────────────────
-    engine = Engine()
+    engine = Engine(**engine_kwargs)
     engine.register_table("vendors",      vendors,      primary_key="vendor_id")
     engine.register_table("invoices",     invoices,     primary_key="invoice_id")
     engine.register_table("payments",     payments,     primary_key="payment_id")

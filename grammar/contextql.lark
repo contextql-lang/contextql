@@ -109,7 +109,8 @@ context_invocation: qualified_name context_call_args?
                   | MCP LPAR qualified_name RPAR
 context_call_args: LPAR named_arg (COMMA named_arg)* RPAR
 named_arg: identifier ASSIGN expr
-temporal_qualifier: AT literal
+temporal_qualifier: AT VERSION INT
+                  | AT literal
                   | BETWEEN literal AND literal
 
 // =========================
@@ -361,6 +362,7 @@ THEN: /THEN\b/i
 IN: /IN\b/i
 NOT: /NOT\b/i
 AT: /AT\b/i
+VERSION: /VERSION\b/i
 BETWEEN: /BETWEEN\b/i
 AND: /AND\b/i
 OR: /OR\b/i

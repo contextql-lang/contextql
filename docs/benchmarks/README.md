@@ -4,25 +4,28 @@ Machine-specific measurements produced by `benchmarks/post_trade_benchmark.py`
 (plan section 12). Environment details are embedded in each report; numbers
 are not universal guarantees.
 
-## post-trade-10m-2026-07-23
+## post-trade-10m-2026-07-24
 
-10,000,000 deterministic transactions, Roaring snapshots, Linux x86_64
-(24 cores), Python 3.12, DuckDB 1.5.5, pyroaring.
+10,000,000 deterministic transactions, Roaring snapshots, Windows x86_64
+(8 logical CPUs), Python 3.11.15, DuckDB 1.5.5, PyRoaring 1.1.0. The run used
+clean source commit `439f03605d1955beb91f79bac4810b7eba99d764`.
 
 | Measurement | Result |
 |---|---|
-| Dataset generation | 26.8 s, 854 MB on disk |
-| Cold context materialization | ~0.26 s per context (9 contexts) |
+| Dataset generation | 86.29 s, 855.1 MB on disk |
+| Cold context materialization | 0.935 s average (0.654-1.670 s, 9 contexts) |
 | Bitmap vs reference SQL counts | 9/9 exact matches |
-| Union (3 contexts, 275,127 members) | 0.7 ms |
-| Intersection (2 contexts) | 0.27 ms |
-| Difference | 0.21 ms |
-| Warm top-20 intervention query | 293 ms, snapshot semi-join pushdown |
-| Peak RSS | 1.45 GB |
+| Union (3 contexts, 275,127 members) | 0.923 ms |
+| Intersection (2 contexts) | 18.865 ms |
+| Difference | 0.447 ms |
+| Warm top-20 intervention query | 753 ms, snapshot semi-join pushdown |
+| Connector + native REMOTE narrowing | 46,703 IDs, exact match, `roaring64` |
+| Peak RSS | 1,270.4 MB |
 
-Acceptance gates (plan section 12): all pass. Warm bitmap algebra is ~370x
-faster than rebuilding membership; selective queries do not transfer ten
-million rows into Pandas.
+Acceptance gates (plan section 12): all correctness gates pass. The selective
+top-20 query uses snapshot pushdown; its 20 returned rows exactly match the SQL
+reference. These are machine-specific observations, not performance
+guarantees.
 
 Context cardinalities at 10M (deterministic, reported not forced):
 

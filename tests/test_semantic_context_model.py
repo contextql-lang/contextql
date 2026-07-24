@@ -58,7 +58,7 @@ class TestPlannedDefinitionLowering:
         assert model.options == {
             "materialized": True,
             "storage": "roaring",
-            "refresh_mode": "incremental",
+            "refresh_mode": "scheduled",
             "refresh_interval": "1 minute",
             "stale_after": "2 minutes",
             "history": True,
@@ -179,8 +179,8 @@ class TestCatalogEntryFields:
 
     def test_new_fields_default(self):
         entry = ContextCatalogEntry(name="c", entity_key_name="id")
-        assert entry.context_id is None
-        assert entry.namespace is None
+        assert entry.context_id is not None
+        assert entry.namespace == "default"
         assert entry.version == 1
         assert entry.definition_hash is None
         assert entry.lifecycle_state == "draft"
