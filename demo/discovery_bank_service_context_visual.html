@@ -1,0 +1,883 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ContextQL × Discovery Bank - service context concept visual</title>
+  <style>
+    :root {
+      --ink: #071a2a;
+      --navy: #08243a;
+      --cyan: #00a8c8;
+      --cyan-soft: #dff6fa;
+      --magenta: #d6006f;
+      --magenta-soft: #fde4f0;
+      --slate: #435466;
+      --muted: #6d7885;
+      --paper: #ffffff;
+      --panel: #f1f2f3;
+      --rule: #dce1e5;
+      --success: #14866d;
+      --warning: #a76700;
+      --shadow: 0 18px 50px rgba(7, 26, 42, .09);
+      --radius: 22px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.45;
+    }
+    button, select, input { font: inherit; }
+    a { color: var(--navy); }
+    button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible {
+      outline: 3px solid color-mix(in srgb, var(--cyan), white 28%);
+      outline-offset: 3px;
+    }
+
+    .shell { width: min(1180px, calc(100% - 48px)); margin-inline: auto; }
+    .topbar {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      border-bottom: 1px solid rgba(220, 225, 229, .9);
+      background: rgba(255, 255, 255, .94);
+      backdrop-filter: blur(16px);
+    }
+    .topbar-inner {
+      min-height: 70px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 28px;
+    }
+    .brand {
+      color: var(--cyan);
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: .045em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .top-note {
+      color: var(--slate);
+      font-size: 12px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .hero {
+      min-height: 690px;
+      display: grid;
+      grid-template-columns: 1.05fr .95fr;
+      align-items: center;
+      gap: clamp(42px, 7vw, 94px);
+      padding: 84px 0 72px;
+    }
+    .eyebrow {
+      margin: 0 0 18px;
+      color: var(--magenta);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, p { text-wrap: pretty; }
+    h1 {
+      max-width: 690px;
+      margin: 0;
+      font-size: clamp(48px, 6vw, 78px);
+      line-height: .98;
+      letter-spacing: -.055em;
+    }
+    .hero-copy {
+      max-width: 660px;
+      margin: 28px 0 0;
+      color: var(--slate);
+      font-size: clamp(19px, 2.1vw, 25px);
+      line-height: 1.35;
+    }
+    .hero-foot {
+      margin-top: 36px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 24px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .hero-weave {
+      position: relative;
+      min-height: 510px;
+      overflow: hidden;
+      border-radius: 88px 22px 88px 22px;
+      background:
+        radial-gradient(circle at 69% 48%, rgba(214, 0, 111, .92) 0 2px, rgba(214, 0, 111, .4) 3px 14px, transparent 31px),
+        radial-gradient(circle at 69% 48%, rgba(0, 168, 200, .62), transparent 38%),
+        linear-gradient(145deg, #020916, #08243a 58%, #020916);
+      box-shadow: var(--shadow);
+    }
+    .hero-weave::before,
+    .hero-weave::after {
+      content: "";
+      position: absolute;
+      inset: -30%;
+      background: repeating-radial-gradient(ellipse at 67% 50%, transparent 0 30px, rgba(73, 200, 255, .24) 31px 32px, transparent 33px 54px);
+      transform: rotate(-11deg) scale(1.3, .62);
+      animation: breathe 9s ease-in-out infinite alternate;
+    }
+    .hero-weave::after {
+      inset: -20%;
+      opacity: .54;
+      transform: rotate(13deg) scale(1.2, .72);
+      animation-direction: alternate-reverse;
+      animation-duration: 12s;
+    }
+    @keyframes breathe {
+      from { translate: -1.5% 0; opacity: .55; }
+      to { translate: 1.5% 0; opacity: .9; }
+    }
+    .weave-label {
+      position: absolute;
+      z-index: 2;
+      max-width: 180px;
+      color: white;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    .weave-label::before {
+      content: "";
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      margin-right: 9px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 18px rgba(0, 168, 200, .9);
+    }
+    .weave-label:nth-child(1) { top: 17%; left: 10%; }
+    .weave-label:nth-child(2) { top: 34%; left: 6%; }
+    .weave-label:nth-child(3) { bottom: 28%; left: 13%; }
+    .weave-label:nth-child(4) { bottom: 13%; left: 26%; }
+    .weave-output {
+      position: absolute;
+      z-index: 2;
+      right: 7%;
+      bottom: 8%;
+      width: 210px;
+      padding: 17px 19px;
+      border: 1px solid rgba(255,255,255,.22);
+      border-radius: 15px;
+      color: white;
+      background: rgba(4, 18, 33, .72);
+      backdrop-filter: blur(10px);
+    }
+    .weave-output strong { display: block; font-size: 24px; line-height: 1.05; }
+    .weave-output span { display: block; margin-top: 7px; color: #c8eaf0; font-size: 12px; }
+
+    .scope-strip {
+      display: grid;
+      grid-template-columns: 1.35fr .65fr;
+      border-top: 1px solid var(--rule);
+      border-bottom: 1px solid var(--rule);
+    }
+    .scope-now, .scope-later { padding: 27px 30px; }
+    .scope-now { border-left: 7px solid var(--cyan); background: var(--cyan-soft); }
+    .scope-later { border-left: 1px dashed var(--magenta); background: var(--magenta-soft); }
+    .scope-strip strong { display: block; margin-bottom: 5px; font-size: 15px; }
+    .scope-strip span { color: var(--slate); font-size: 14px; }
+
+    section { padding: 104px 0; }
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(240px, 390px);
+      align-items: end;
+      gap: 50px;
+      margin-bottom: 48px;
+    }
+    h2 {
+      margin: 0;
+      max-width: 850px;
+      font-size: clamp(37px, 5vw, 60px);
+      line-height: 1.02;
+      letter-spacing: -.045em;
+    }
+    .section-copy { margin: 0; color: var(--slate); font-size: 18px; }
+    h3 { margin: 0; font-size: 25px; line-height: 1.12; letter-spacing: -.02em; }
+    .kicker { color: var(--magenta); font-size: 12px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+
+    .source-field {
+      overflow: hidden;
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    .source-row {
+      display: grid;
+      grid-template-columns: 245px 1fr 180px;
+      align-items: center;
+      min-height: 82px;
+      border-bottom: 1px solid var(--rule);
+    }
+    .source-row:last-child { border-bottom: 0; }
+    .source-name { padding: 18px 24px; font-weight: 750; }
+    .source-events { padding: 18px 24px; color: var(--slate); font-size: 14px; }
+    .source-path { position: relative; height: 100%; background: linear-gradient(90deg, transparent, var(--cyan-soft)); }
+    .source-path::before {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 12%;
+      right: 15%;
+      height: 2px;
+      background: var(--cyan);
+    }
+    .source-path::after {
+      content: "";
+      position: absolute;
+      top: calc(50% - 5px);
+      right: 12%;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 0 8px rgba(0,168,200,.1);
+    }
+    .source-tag {
+      justify-self: end;
+      margin-right: 20px;
+      padding: 6px 10px;
+      border: 1px solid var(--rule);
+      border-radius: 999px;
+      color: var(--muted);
+      background: white;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .context-snapshot {
+      margin-top: 28px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      overflow: hidden;
+      border-radius: var(--radius);
+      color: white;
+      background: var(--navy);
+    }
+    .snapshot-copy { padding: 34px; }
+    .snapshot-copy p { margin: 12px 0 0; color: #c5d5df; }
+    .bitmap {
+      padding: 30px 34px;
+      background: rgba(255,255,255,.035);
+      font-family: Consolas, "SFMono-Regular", monospace;
+      font-size: clamp(11px, 1.25vw, 15px);
+      line-height: 1.85;
+      white-space: nowrap;
+      overflow-x: auto;
+    }
+    .bit-on { color: #67e5f6; font-weight: 800; }
+    .bit-hot { color: #ff65b7; font-weight: 800; }
+
+    .control-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 24px;
+    }
+    .segmented { display: inline-flex; flex-wrap: wrap; gap: 6px; padding: 5px; border-radius: 999px; background: var(--panel); }
+    .segmented button {
+      border: 0;
+      border-radius: 999px;
+      padding: 9px 15px;
+      color: var(--slate);
+      background: transparent;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 750;
+    }
+    .segmented button[aria-pressed="true"] { color: white; background: var(--navy); }
+    .segmented.scenario button[aria-pressed="true"] { background: var(--magenta); }
+
+    .funnel-panel { padding: clamp(22px, 4vw, 42px); border-radius: var(--radius); background: var(--panel); }
+    .funnel { display: grid; gap: 10px; }
+    .funnel-row {
+      display: grid;
+      grid-template-columns: 235px minmax(0, 1fr) 120px;
+      align-items: center;
+      gap: 17px;
+    }
+    .stage-name { display: block; font-size: 14px; font-weight: 750; }
+    .stage-op { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .funnel-track { min-height: 47px; border-radius: 7px; background: white; }
+    .funnel-bar {
+      min-width: 11%;
+      height: 47px;
+      display: flex;
+      align-items: center;
+      padding: 0 14px;
+      border-radius: 7px;
+      color: var(--navy);
+      background: var(--cyan-soft);
+      font-weight: 800;
+      transition: width .5s cubic-bezier(.2,.8,.2,1), background .3s ease;
+    }
+    .funnel-row:nth-last-child(2) .funnel-bar { color: white; background: var(--cyan); }
+    .funnel-row:last-child .funnel-bar { color: white; background: var(--magenta); }
+    .stage-count { display: block; text-align: right; font-size: 14px; font-weight: 800; }
+    .stage-share { display: block; text-align: right; color: var(--muted); font-size: 10px; }
+    .synthetic-note { margin: 18px 0 0; color: var(--muted); font-size: 12px; }
+
+    .algebra-grid { display: grid; grid-template-columns: 1.04fr .96fr; gap: 22px; }
+    .venn-panel, .algebra-panel { min-height: 430px; padding: 26px; border: 1px solid var(--rule); border-radius: var(--radius); }
+    .venn { width: 100%; height: 360px; }
+    .venn circle { fill-opacity: .2; stroke-width: 2; transition: opacity .25s ease, fill-opacity .25s ease; }
+    .venn circle.inactive { opacity: .16; fill-opacity: .05; }
+    .venn text { fill: var(--ink); font-size: 13px; font-family: Consolas, monospace; pointer-events: none; }
+    .venn .set-title { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 14px; font-weight: 750; }
+    .checks { display: grid; gap: 8px; }
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 10px 12px;
+      border: 1px solid var(--rule);
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .check input { accent-color: var(--magenta); }
+    .algebra-select { margin-top: 16px; display: grid; gap: 6px; color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+    .algebra-select select { padding: 11px; border: 1px solid var(--rule); border-radius: 8px; color: var(--ink); background: white; }
+    .algebra-result { margin: 18px 0; padding: 20px; border-radius: 12px; color: white; background: var(--navy); }
+    .algebra-value { font-size: 44px; font-weight: 800; line-height: 1; letter-spacing: -.04em; }
+    .algebra-expression { margin-top: 8px; color: #bdd5e2; font: 12px Consolas, monospace; }
+    .region-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .region-table td { padding: 6px 0; border-bottom: 1px solid var(--rule); }
+    .region-table td:last-child { text-align: right; font-weight: 800; }
+
+    .value-chain {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      overflow: hidden;
+      border: 1px solid var(--rule);
+      border-radius: var(--radius);
+    }
+    .value-step { position: relative; min-height: 195px; padding: 24px 21px; border-right: 1px solid var(--rule); }
+    .value-step:last-child { border-right: 0; }
+    .value-step::after {
+      content: "→";
+      position: absolute;
+      z-index: 2;
+      right: -12px;
+      top: 26px;
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      color: white;
+      background: var(--navy);
+    }
+    .value-step:last-child::after { display: none; }
+    .step-number { color: var(--cyan); font-size: 12px; font-weight: 850; letter-spacing: .08em; }
+    .value-step h3 { margin-top: 20px; font-size: 20px; }
+    .value-step p { margin: 9px 0 0; color: var(--slate); font-size: 13px; }
+    .value-step .visibility { display: inline-block; margin-top: 16px; color: var(--success); font-size: 10px; font-weight: 850; letter-spacing: .05em; text-transform: uppercase; }
+    .value-step.future { background: repeating-linear-gradient(-45deg, var(--magenta-soft), var(--magenta-soft) 9px, #fff 9px, #fff 18px); }
+    .value-step.future .visibility { color: var(--magenta); }
+
+    .case-layout { display: grid; grid-template-columns: 320px 1fr; gap: 30px; }
+    .case-tabs { display: grid; gap: 10px; align-content: start; }
+    .case-tab {
+      width: 100%;
+      padding: 16px 18px;
+      border: 1px solid var(--rule);
+      border-radius: 12px;
+      text-align: left;
+      color: var(--ink);
+      background: white;
+      cursor: pointer;
+    }
+    .case-tab strong { display: block; }
+    .case-tab span { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .case-tab[aria-pressed="true"] { border-color: var(--cyan); background: var(--cyan-soft); box-shadow: inset 5px 0 0 var(--cyan); }
+    .case-file { overflow: hidden; border-radius: var(--radius); color: white; background: var(--navy); box-shadow: var(--shadow); }
+    .case-head { padding: 30px; border-bottom: 1px solid rgba(255,255,255,.12); }
+    .case-head p { margin: 9px 0 0; color: #bed2df; }
+    .case-contexts { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
+    .case-contexts span { padding: 6px 9px; border: 1px solid rgba(103,229,246,.4); border-radius: 999px; color: #8eeffc; font: 11px Consolas, monospace; }
+    .case-body { display: grid; grid-template-columns: 1.12fr .88fr; }
+    .timeline { padding: 28px 30px; }
+    .timeline-item { position: relative; display: grid; grid-template-columns: 78px 1fr; gap: 16px; padding-bottom: 22px; }
+    .timeline-item::before { content: ""; position: absolute; left: 85px; top: 22px; bottom: 0; width: 1px; background: rgba(255,255,255,.2); }
+    .timeline-item:last-child::before { display: none; }
+    .timeline-time { color: #7de8f6; font: 11px Consolas, monospace; }
+    .timeline-event { position: relative; padding-left: 17px; color: #e8f0f4; font-size: 13px; }
+    .timeline-event::before { content: ""; position: absolute; left: -2px; top: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); }
+    .timeline-event strong { display: block; margin-bottom: 3px; color: white; }
+    .next-action { padding: 28px 30px; background: rgba(255,255,255,.055); }
+    .next-action .label { color: #ff7bbe; font-size: 11px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase; }
+    .next-action h3 { margin-top: 10px; color: white; }
+    .next-action p { color: #c4d5df; font-size: 13px; }
+    .boundary-note { margin-top: 20px; padding: 14px; border-left: 3px solid var(--magenta); color: #f6c5dd; background: rgba(214,0,111,.12); font-size: 12px; }
+
+    .future-band {
+      position: relative;
+      overflow: hidden;
+      padding: clamp(30px, 5vw, 58px);
+      border: 2px dashed color-mix(in srgb, var(--magenta), white 35%);
+      border-radius: var(--radius);
+      background: linear-gradient(120deg, white, var(--magenta-soft));
+    }
+    .future-band::after { content: "PHASE 2"; position: absolute; right: -8px; bottom: -36px; color: rgba(214,0,111,.08); font-size: 120px; font-weight: 900; letter-spacing: -.06em; }
+    .future-grid { position: relative; z-index: 2; margin-top: 30px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: rgba(214,0,111,.18); }
+    .future-item { min-height: 150px; padding: 22px; background: rgba(255,255,255,.91); }
+    .future-item strong { display: block; color: var(--magenta); font-size: 18px; }
+    .future-item span { display: block; margin-top: 9px; color: var(--slate); font-size: 13px; }
+
+    footer { padding: 32px 0 52px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 11px; }
+    .footer-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; }
+    .footer-grid p { margin: 0; }
+
+    @media (max-width: 900px) {
+      .hero { grid-template-columns: 1fr; min-height: auto; }
+      .hero-weave { min-height: 410px; }
+      .section-head { grid-template-columns: 1fr; gap: 18px; }
+      .scope-strip, .context-snapshot, .algebra-grid, .case-layout, .case-body { grid-template-columns: 1fr; }
+      .source-row { grid-template-columns: 200px 1fr; }
+      .source-path { display: none; }
+      .value-chain { grid-template-columns: 1fr 1fr; }
+      .value-step { border-bottom: 1px solid var(--rule); }
+      .future-grid { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 620px) {
+      .shell { width: min(100% - 28px, 1180px); }
+      .top-note { display: none; }
+      .hero { padding-top: 56px; }
+      .hero-weave { min-height: 330px; border-radius: 54px 14px; }
+      section { padding: 72px 0; }
+      .scope-strip, .value-chain, .future-grid { grid-template-columns: 1fr; }
+      .source-row { grid-template-columns: 1fr; padding: 4px 0; }
+      .source-events { padding-top: 0; }
+      .source-tag { justify-self: start; margin: 0 0 16px 24px; }
+      .funnel-row { grid-template-columns: 1fr 82px; gap: 8px; }
+      .funnel-track { grid-column: 1 / -1; grid-row: 2; }
+      .stage-count { grid-column: 2; grid-row: 1; }
+      .stage-share { display: none; }
+      .value-step { min-height: auto; }
+      .value-step::after { display: none; }
+      .footer-grid { grid-template-columns: 1fr; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <div class="brand">ContextQL &nbsp;×&nbsp; Discovery Bank</div>
+      <div class="top-note">Synthetic opportunity visual · Bank-controlled evidence</div>
+    </div>
+  </header>
+
+  <main>
+    <div class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Proactive client friction and value recovery</p>
+          <h1>See the client situation before they have to explain it.</h1>
+          <p class="hero-copy">Compose the signals already controlled by the Bank into a current, explainable service view - then prepare the case, owner and next action.</p>
+          <div class="hero-foot">
+            <span>500,000 illustrative active clients</span>
+            <span>Aggregate synthetic counts</span>
+            <span>No raw client data</span>
+          </div>
+        </div>
+        <div class="hero-weave" aria-label="Bank signals converging into reusable contexts">
+          <div class="weave-label">Payments + cards</div>
+          <div class="weave-label">App + authentication</div>
+          <div class="weave-label">Cases + complaints</div>
+          <div class="weave-label">Calls + consent</div>
+          <div class="weave-output"><strong>120</strong><span>illustrative priority service actions this week</span></div>
+        </div>
+      </section>
+
+      <div class="scope-strip" aria-label="Concept scope boundary">
+        <div class="scope-now"><strong>Bank-controlled evidence</strong><span>Payments, cards, fees, app and authentication events, Bank-owned benefits, cases, complaints, contacts and consent.</span></div>
+        <div class="scope-later"><strong>Future cross-Discovery confirmation</strong><span>Health, Vitality, Insure and Invest remain painted as the next horizon.</span></div>
+      </div>
+    </div>
+
+    <section>
+      <div class="shell">
+        <div class="section-head">
+          <div><p class="eyebrow">The Bank field of view</p><h2>Use what the Bank can already observe and govern.</h2></div>
+          <p class="section-copy">Each source contributes small changes. ContextQL versions the resulting client membership once, then reuses it across service questions.</p>
+        </div>
+        <div class="source-field" aria-label="Bank-controlled source feeds">
+          <div class="source-row"><div class="source-name">Payments and card authorisations</div><div class="source-events">Successful and failed payments · known Discovery billers · declines · reversals</div><div class="source-tag">event / CDC</div></div>
+          <div class="source-row"><div class="source-name">Card administration</div><div class="source-events">Primary, additional and secondary cards · activation · status · fees · delivery</div><div class="source-tag">CDC / poll</div></div>
+          <div class="source-row"><div class="source-name">Bank app and authentication</div><div class="source-events">Login, OTP, device, help search, voucher generation and technical outcome</div><div class="source-tag">event stream</div></div>
+          <div class="source-row"><div class="source-name">CRM, cases and complaints</div><div class="source-events">Issue, promise time, status, owner, hand-offs, cancellation or payment-route request</div><div class="source-tag">CDC / poll</div></div>
+          <div class="source-row"><div class="source-name">Contact centre</div><div class="source-events">Inbound and abandoned calls · reason · repeat contact · verified identity</div><div class="source-tag">webhook</div></div>
+          <div class="source-row"><div class="source-name">Consent and preferences</div><div class="source-events">Permitted service channel · suppression · recent contact · do-not-contact state</div><div class="source-tag">authoritative</div></div>
+        </div>
+        <div class="context-snapshot">
+          <div class="snapshot-copy">
+            <span class="kicker">Reusable membership</span>
+            <h3>Bank events become small, versioned client contexts.</h3>
+            <p>Compose membership first. Retrieve detailed evidence only for the narrowed, authorised client set.</p>
+          </div>
+          <div class="bitmap" aria-label="Simplified bitmap membership example">
+            CLIENT IDS&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;1 2 3 4 5 6 7 8 9<br>
+            recent_friction&nbsp;&nbsp;&nbsp;&nbsp;<span class="bit-on">1</span> 0 <span class="bit-on">1</span> 0 0 <span class="bit-on">1</span> 0 <span class="bit-on">1</span> 0<br>
+            repeat_contact&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;0 0 <span class="bit-hot">1</span> 0 <span class="bit-hot">1</span> <span class="bit-hot">1</span> 0 0 0<br>
+            past_promise&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;0 <span class="bit-hot">1</span> <span class="bit-hot">1</span> 0 0 <span class="bit-hot">1</span> 0 0 <span class="bit-hot">1</span><br>
+            card_value_gap&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;0 0 0 <span class="bit-on">1</span> 0 <span class="bit-on">1</span> 0 0 0<br>
+            <strong>AND · OR · NOT → relevant clients now</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section style="background:#fafafa">
+      <div class="shell">
+        <div class="section-head">
+          <div><p class="eyebrow">Decision paths</p><h2>Two Bank-owned questions narrow 500,000 clients to action.</h2></div>
+          <p class="section-copy" id="funnel-description">Find people experiencing several signals at once, then remove cases already being handled.</p>
+        </div>
+        <div class="control-row">
+          <div class="segmented scenario" aria-label="Select funnel scenario">
+            <button type="button" data-scenario="friction" aria-pressed="true">Service friction</button>
+            <button type="button" data-scenario="value" aria-pressed="false">Paid-for value gap</button>
+          </div>
+          <div class="segmented" aria-label="Select time window">
+            <button type="button" data-window="24h" aria-pressed="false">24 hours</button>
+            <button type="button" data-window="7d" aria-pressed="true">7 days</button>
+            <button type="button" data-window="30d" aria-pressed="false">30 days</button>
+          </div>
+        </div>
+        <div class="funnel-panel">
+          <div id="funnel" class="funnel" aria-live="polite"></div>
+          <p class="synthetic-note">Illustrative scenario counts only. They are designed to make the operating logic testable; Discovery would replace them with measured baselines during discovery.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <div class="section-head">
+          <div><p class="eyebrow">Context algebra</p><h2>Overlap reveals situations that a single queue cannot.</h2></div>
+          <p class="section-copy">Select the contexts and operation. The exact count is recomputed from the seven synthetic regions.</p>
+        </div>
+        <div class="algebra-grid">
+          <div class="venn-panel">
+            <svg class="venn" viewBox="0 0 500 360" role="img" aria-labelledby="venn-title venn-desc">
+              <title id="venn-title">Bank service context overlap</title>
+              <desc id="venn-desc">Schematic Venn diagram for recent friction, repeat contact and an unresolved commitment.</desc>
+              <circle data-set="f" cx="174" cy="154" r="112" fill="var(--cyan)" stroke="var(--cyan)"></circle>
+              <circle data-set="c" cx="324" cy="175" r="91" fill="var(--magenta)" stroke="var(--magenta)"></circle>
+              <circle data-set="u" cx="237" cy="273" r="60" fill="var(--navy)" stroke="var(--navy)"></circle>
+              <text class="set-title" x="72" y="40">recent_friction</text>
+              <text id="venn-f" x="110" y="148"></text>
+              <text class="set-title" x="330" y="94">repeat_contact</text>
+              <text id="venn-c" x="351" y="174"></text>
+              <text class="set-title" x="177" y="350">past_promise</text>
+              <text id="venn-u" x="208" y="292"></text>
+              <text id="venn-center" x="244" y="185"></text>
+            </svg>
+          </div>
+          <div class="algebra-panel">
+            <div class="checks">
+              <label class="check"><input type="checkbox" data-context="f" checked> Recent payment, card or digital friction</label>
+              <label class="check"><input type="checkbox" data-context="c" checked> Repeat contact in the selected window</label>
+              <label class="check"><input type="checkbox" data-context="u" checked> Open case past the promised update</label>
+            </div>
+            <label class="algebra-select">Bitmap operation
+              <select id="algebra-op">
+                <option value="union">Union - any selected context</option>
+                <option value="intersection">Intersection - all selected contexts</option>
+                <option value="exclusive">Exclusive - selected contexts only</option>
+              </select>
+            </label>
+            <div class="algebra-result" aria-live="polite"><div id="algebra-value" class="algebra-value"></div><div id="algebra-expression" class="algebra-expression"></div></div>
+            <table id="region-table" class="region-table" aria-label="Exact synthetic overlap region counts"></table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section style="background:#fafafa">
+      <div class="shell">
+        <div class="section-head">
+          <div><p class="eyebrow">Paid-for value</p><h2>Observe where a paid Bank experience stops delivering.</h2></div>
+          <p class="section-copy">The Bank can observe the full path for Bank-owned products and benefits. For other Discovery services, payment is visible now; delivery confirmation is a future extension.</p>
+        </div>
+        <div class="value-chain" aria-label="Paid-for value realisation chain">
+          <div class="value-step"><span class="step-number">01</span><h3>Paying</h3><p>Fee or identified recurring payment is visible in the Bank ledger.</p><span class="visibility">Bank sees now</span></div>
+          <div class="value-step"><span class="step-number">02</span><h3>Configured</h3><p>Card, app registration, account link and Bank-owned entitlement are ready.</p><span class="visibility">Bank sees now</span></div>
+          <div class="value-step"><span class="step-number">03</span><h3>Attempted</h3><p>Voucher, card, login or service action was attempted and has an outcome.</p><span class="visibility">Bank sees now</span></div>
+          <div class="value-step"><span class="step-number">04</span><h3>Received</h3><p>For Bank-owned benefits, a successful outcome completes the chain.</p><span class="visibility">Bank sees now</span></div>
+          <div class="value-step future"><span class="step-number">05</span><h3>Externally fulfilled</h3><p>Health, Vitality, Insure or Invest confirms whether its service was delivered.</p><span class="visibility">Future selective context</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <div class="section-head">
+          <div><p class="eyebrow">Case file before the call</p><h2>What happened first, what remains unresolved, who acts next?</h2></div>
+          <p class="section-copy">Choose a synthetic Bank-controlled situation. The evidence stays attributable to its source and time.</p>
+        </div>
+        <div class="case-layout">
+          <div class="case-tabs" aria-label="Select synthetic case">
+            <button class="case-tab" type="button" data-case="lounge" aria-pressed="true"><strong>Secondary card lounge access</strong><span>Paid card · setup issue · failed benefit attempt</span></button>
+            <button class="case-tab" type="button" data-case="card" aria-pressed="false"><strong>Replacement card stalled</strong><span>Fee active · delivery promise · repeated contact</span></button>
+            <button class="case-tab" type="button" data-case="payment" aria-pressed="false"><strong>Discovery payment route query</strong><span>Known payment · client request · external status unknown</span></button>
+          </div>
+          <article class="case-file" aria-live="polite">
+            <div class="case-head"><span class="kicker">Synthetic client · no personal data</span><h3 id="case-title"></h3><p id="case-summary"></p><div id="case-contexts" class="case-contexts"></div></div>
+            <div class="case-body"><div id="case-timeline" class="timeline"></div><aside class="next-action"><span class="label">Recommended next action</span><h3 id="case-action"></h3><p id="case-reason"></p><div id="case-boundary" class="boundary-note"></div></aside></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="shell">
+        <div class="future-band">
+          <span class="kicker">Retained future scenario</span>
+          <h2>Selective cross-Discovery contexts deepen the same picture later.</h2>
+          <p class="section-copy" style="margin-top:18px;max-width:780px">The initial concept does not depend on these sources. A future extension adds approved, purpose-limited membership and status - not an uncontrolled copy of every underlying record.</p>
+          <div class="future-grid">
+            <div class="future-item"><strong>Health</strong><span>Administrative case open · contribution or membership issue · no clinical detail.</span></div>
+            <div class="future-item"><strong>Vitality</strong><span>Benefit activation, partner linkage, reward or usage confirmation.</span></div>
+            <div class="future-item"><strong>Insure</strong><span>Policy servicing, premium or renewal status relevant to the current interaction.</span></div>
+            <div class="future-item"><strong>Invest</strong><span>Direct-client instruction status; pooled investments remain at fund or mandate level.</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell footer-grid">
+      <p><strong>Scope:</strong> Opportunity visual only. All counts and cases are synthetic. The 500,000 figure is a deliberately scoped illustrative cohort, not Discovery Bank’s reported total client count.</p>
+      <p><strong>Public product references:</strong> <a href="https://www.discovery.co.za/bank/info-and-tips-your-discovery-bank-cards">additional and secondary cards</a> · <a href="https://www.discovery.co.za/bank/info-and-tips-travel-benefits-and-rewards">lounge access rules</a>. Operational definitions require Discovery validation.</p>
+    </div>
+  </footer>
+
+  <script>
+    const number = new Intl.NumberFormat("en-ZA");
+    const compact = new Intl.NumberFormat("en-ZA", { notation: "compact", maximumFractionDigits: 1 });
+    let selectedWindow = "7d";
+    let selectedScenario = "friction";
+
+    const funnels = {
+      friction: {
+        description: "Find clients experiencing several Bank-owned signals at once, then remove cases already being handled.",
+        "24h": [
+          ["Active illustrative clients", "eligible concept cohort", 500000],
+          ["Recent Bank friction", "payment, card or digital signal", 6200],
+          ["Overlapping signals", "two or more active contexts", 950],
+          ["Unresolved owner gap", "past promise or repeated hand-off", 380],
+          ["Priority action queue", "contactable and not suppressed", 65]
+        ],
+        "7d": [
+          ["Active illustrative clients", "eligible concept cohort", 500000],
+          ["Recent Bank friction", "payment, card or digital signal", 19700],
+          ["Overlapping signals", "two or more active contexts", 3300],
+          ["Unresolved owner gap", "past promise or repeated hand-off", 1100],
+          ["Priority action queue", "contactable and not suppressed", 120]
+        ],
+        "30d": [
+          ["Active illustrative clients", "eligible concept cohort", 500000],
+          ["Recent Bank friction", "payment, card or digital signal", 54200],
+          ["Overlapping signals", "two or more active contexts", 11200],
+          ["Unresolved owner gap", "past promise or repeated hand-off", 4300],
+          ["Priority action queue", "contactable and not suppressed", 350]
+        ]
+      },
+      value: {
+        description: "Find paid Bank products or benefits with corroborating evidence of an activation, access, billing or service problem.",
+        "24h": [
+          ["Active illustrative clients", "eligible concept cohort", 500000],
+          ["Paid Bank add-on or known payment", "observed charge or fee", 142000],
+          ["Attention signal", "setup, access, help or billing event", 1600],
+          ["Corroborated value gap", "two or more Bank-owned signals", 410],
+          ["Priority recovery queue", "actionable and not suppressed", 45]
+        ],
+        "7d": [
+          ["Active illustrative clients", "eligible concept cohort", 500000],
+          ["Paid Bank add-on or known payment", "observed charge or fee", 142000],
+          ["Attention signal", "setup, access, help or billing event", 7900],
+          ["Corroborated value gap", "two or more Bank-owned signals", 1980],
+          ["Priority recovery queue", "actionable and not suppressed", 160]
+        ],
+        "30d": [
+          ["Active illustrative clients", "eligible concept cohort", 500000],
+          ["Paid Bank add-on or known payment", "observed charge or fee", 142000],
+          ["Attention signal", "setup, access, help or billing event", 21800],
+          ["Corroborated value gap", "two or more Bank-owned signals", 5400],
+          ["Priority recovery queue", "actionable and not suppressed", 430]
+        ]
+      }
+    };
+
+    const vennByWindow = {
+      "24h": { "100": 3600, "010": 750, "001": 520, "110": 240, "101": 210, "011": 130, "111": 55 },
+      "7d": { "100": 10800, "010": 3100, "001": 2500, "110": 1200, "101": 1050, "011": 700, "111": 350 },
+      "30d": { "100": 28000, "010": 7200, "001": 6900, "110": 4200, "101": 3600, "011": 2100, "111": 1400 }
+    };
+    const bitIndex = { f: 0, c: 1, u: 2 };
+    const contextNames = { f: "recent_friction", c: "repeat_contact", u: "past_promise" };
+    const regionNames = {
+      "100": "Recent friction only", "010": "Repeat contact only", "001": "Past promise only",
+      "110": "Friction ∩ repeat contact", "101": "Friction ∩ past promise",
+      "011": "Repeat contact ∩ past promise", "111": "All three"
+    };
+
+    const cases = {
+      lounge: {
+        title: "Client B-1042 · paid secondary card, lounge access failed",
+        summary: "The Bank can see the card fee, secondary-card setup, app outcome, contact attempts and open case without consulting another Discovery business.",
+        contexts: ["secondary_card_fee_active", "card_setup_incomplete", "lounge_attempt_failed", "repeat_contact_7d", "open_case_past_promise"],
+        timeline: [
+          ["02 Aug 08:00", "Fee observed", "Monthly secondary-card fee posted to the primary account."],
+          ["02 Aug 16:42", "Setup signal", "Secondary cardholder registration remains incomplete in the Bank app."],
+          ["03 Aug 06:18", "Benefit attempt", "Lounge voucher generation returned an account-linking error."],
+          ["03 Aug 06:25", "Contact signal", "In-app call abandoned; a second call followed 19 minutes later."],
+          ["03 Aug 11:00", "Promise missed", "Servicing case remains open beyond the promised update time."]
+        ],
+        action: "Route one prepared case to card servicing",
+        reason: "Resolve the secondary-card registration and voucher link, confirm remaining lounge eligibility, and avoid asking the client to reconstruct the sequence.",
+        boundary: "No external product data is required. Lounge admission can still depend on published eligibility and capacity rules, so the case explains the reason before assuming a system defect."
+      },
+      card: {
+        title: "Client C-2088 · replacement card delivery is past promise",
+        summary: "A damaged secondary card was replaced, but delivery and repeated contacts have become a single unresolved service situation.",
+        contexts: ["secondary_card_fee_active", "replacement_in_flight", "delivery_past_promise", "repeat_contact_7d", "no_effective_owner"],
+        timeline: [
+          ["28 Jul 14:04", "Replacement requested", "Secondary cardholder reported damage and completed the replacement request."],
+          ["29 Jul 09:15", "Fulfilment event", "Card issued and handed to the Bank's delivery process."],
+          ["01 Aug 17:00", "Promise missed", "Delivery milestone passed without a confirmed hand-over."],
+          ["02 Aug 10:22", "Repeat contact", "Primary accountholder contacted the Bank after the secondary cardholder's earlier call."],
+          ["03 Aug 08:30", "Ownership gap", "Case has two prior owners and no current next-action timestamp."]
+        ],
+        action: "Assign one fulfilment owner and confirm delivery",
+        reason: "The evidence is already in Bank systems. The client needs a confirmed delivery outcome, not another general card explanation.",
+        boundary: "This is entirely Bank-controlled: card administration, fulfilment, fees, CRM ownership and contact history."
+      },
+      payment: {
+        title: "Client D-3175 · recurring Discovery payment route query",
+        summary: "The Bank sees a recurring payment to an identified Discovery biller and a request to change its payment route. It does not yet know the external benefit status.",
+        contexts: ["known_discovery_payment", "payment_route_help_requested", "repeat_contact_7d", "open_case_past_promise"],
+        timeline: [
+          ["01 Aug 05:10", "Payment observed", "Recurring debit to an identified Discovery service posted successfully."],
+          ["01 Aug 12:38", "Client intent", "Bank help journey opened for moving a recurring payment to the primary account."],
+          ["01 Aug 13:02", "Case created", "Bank servicing case records the requested payment-route change."],
+          ["02 Aug 16:41", "Repeat contact", "Client returned through in-app calling for an update."],
+          ["03 Aug 09:00", "Promise missed", "No confirmed next step has been recorded."]
+        ],
+        action: "Resolve the Bank-controlled payment-routing request",
+        reason: "Explain what the Bank can change, obtain any required mandate, and route the remaining external-service question without claiming that the benefit was or was not delivered.",
+        boundary: "Future extension: the corresponding Health, Vitality, Insure or Invest context could confirm entitlement, fulfilment or cancellation state. The Bank-only view deliberately leaves that status unknown."
+      }
+    };
+
+    function renderFunnel() {
+      const stages = funnels[selectedScenario][selectedWindow];
+      const max = stages[0][2];
+      const maxLog = Math.log10(max);
+      document.querySelector("#funnel-description").textContent = funnels[selectedScenario].description;
+      document.querySelector("#funnel").innerHTML = stages.map(([name, op, count]) => {
+        const width = 11 + (Math.log10(Math.max(count, 1)) / maxLog) * 89;
+        const share = count / max * 100;
+        return `<div class="funnel-row">
+          <div><span class="stage-name">${name}</span><span class="stage-op">${op}</span></div>
+          <div class="funnel-track"><div class="funnel-bar" style="width:${width}%">${compact.format(count)}</div></div>
+          <div><span class="stage-count">${number.format(count)}</span><span class="stage-share">${share < .01 ? share.toFixed(3) : share.toFixed(2)}% of cohort</span></div>
+        </div>`;
+      }).join("");
+    }
+
+    function renderAlgebra() {
+      const regions = vennByWindow[selectedWindow];
+      const selected = [...document.querySelectorAll("[data-context]:checked")].map(input => input.dataset.context);
+      const op = document.querySelector("#algebra-op").value;
+      let total = 0;
+      for (const [key, count] of Object.entries(regions)) {
+        const matches = selected.map(context => key[bitIndex[context]] === "1");
+        let include = false;
+        if (selected.length) {
+          if (op === "union") include = matches.some(Boolean);
+          if (op === "intersection") include = matches.every(Boolean);
+          if (op === "exclusive") include = matches.every(Boolean) && Object.keys(bitIndex)
+            .filter(context => !selected.includes(context))
+            .every(context => key[bitIndex[context]] === "0");
+        }
+        if (include) total += count;
+      }
+      const setCount = position => Object.entries(regions).reduce((sum, [key, count]) => sum + (key[position] === "1" ? count : 0), 0);
+      document.querySelector("#venn-f").textContent = number.format(setCount(0));
+      document.querySelector("#venn-c").textContent = number.format(setCount(1));
+      document.querySelector("#venn-u").textContent = number.format(setCount(2));
+      document.querySelector("#venn-center").textContent = number.format(regions["111"]);
+      document.querySelector("#algebra-value").textContent = number.format(total);
+      document.querySelector("#algebra-expression").textContent = selected.length
+        ? `${op.toUpperCase()}(${selected.map(key => contextNames[key]).join(", ")}) · ${selectedWindow}`
+        : "Select at least one context";
+      document.querySelectorAll("[data-set]").forEach(circle => circle.classList.toggle("inactive", !selected.includes(circle.dataset.set)));
+      document.querySelector("#region-table").innerHTML = Object.entries(regionNames).map(([key, label]) => `<tr><td>${label}</td><td>${number.format(regions[key])}</td></tr>`).join("");
+    }
+
+    function renderCase(key) {
+      const item = cases[key];
+      document.querySelector("#case-title").textContent = item.title;
+      document.querySelector("#case-summary").textContent = item.summary;
+      document.querySelector("#case-contexts").innerHTML = item.contexts.map(context => `<span>${context}</span>`).join("");
+      document.querySelector("#case-timeline").innerHTML = item.timeline.map(([time, title, event]) => `<div class="timeline-item"><div class="timeline-time">${time}</div><div class="timeline-event"><strong>${title}</strong>${event}</div></div>`).join("");
+      document.querySelector("#case-action").textContent = item.action;
+      document.querySelector("#case-reason").textContent = item.reason;
+      document.querySelector("#case-boundary").textContent = item.boundary;
+    }
+
+    document.querySelectorAll("[data-window]").forEach(button => button.addEventListener("click", () => {
+      selectedWindow = button.dataset.window;
+      document.querySelectorAll("[data-window]").forEach(item => item.setAttribute("aria-pressed", item === button ? "true" : "false"));
+      renderFunnel();
+      renderAlgebra();
+    }));
+    document.querySelectorAll("[data-scenario]").forEach(button => button.addEventListener("click", () => {
+      selectedScenario = button.dataset.scenario;
+      document.querySelectorAll("[data-scenario]").forEach(item => item.setAttribute("aria-pressed", item === button ? "true" : "false"));
+      renderFunnel();
+    }));
+    document.querySelectorAll("[data-context]").forEach(input => input.addEventListener("change", renderAlgebra));
+    document.querySelector("#algebra-op").addEventListener("change", renderAlgebra);
+    document.querySelectorAll("[data-case]").forEach(button => button.addEventListener("click", () => {
+      document.querySelectorAll("[data-case]").forEach(item => item.setAttribute("aria-pressed", item === button ? "true" : "false"));
+      renderCase(button.dataset.case);
+    }));
+
+    renderFunnel();
+    renderAlgebra();
+    renderCase("lounge");
+  </script>
+</body>
+</html>
