@@ -16,6 +16,10 @@ build/
 # Node (VS Code extension)
 node_modules/
 
+# Generated presentation workspaces and inspection exports
+.tmp/
+*.pptx.inspect.ndjson
+
 # IDE
 .vscode/
 .idea/
