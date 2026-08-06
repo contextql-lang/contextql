@@ -1,0 +1,54 @@
+{
+  "baselines": {
+    "contextql": "a054c8fcc576f3913d98d664ddf71eeea56d9755",
+    "contextql_server": "78c9565c33237a21dbf87f11d92ac6c7f29a846e"
+  },
+  "environment": {
+    "python": "3.12.13",
+    "platform": "Windows 11 10.0.26200",
+    "pytest": "9.1.1",
+    "duckdb": "1.5.5",
+    "pandas": "3.0.5",
+    "contextql": "0.2.0",
+    "contextql_server": "0.1.0",
+    "optional_extras_installed": [
+      "arrow",
+      "executor",
+      "lsp",
+      "polars",
+      "roaring"
+    ]
+  },
+  "core": {
+    "collected": 556,
+    "passed": 554,
+    "failed": 1,
+    "skipped": 1,
+    "duration_seconds": 239.315,
+    "junit_sha256": "A2B45580CEBAB50AAB72D429CFEE86D7079B3C4FD5D84FE93E3C50F4C37A90D0",
+    "controlled_rerun": {
+      "condition": "polars imported before pytest collection",
+      "passed": 555,
+      "failed": 0,
+      "skipped": 1,
+      "duration_seconds": 202.308,
+      "junit_sha256": "B9DD6F00FE97F7B1688DB94F6EED8040FFFB235BBD099E7249253FE133B46458"
+    },
+    "failure": {
+      "test": "tests/test_result.py::TestOptionalOutputFormats::test_to_polars_raises_without_polars",
+      "observation": "Polars was installed but absent from sys.modules at the test's precondition check. Result.to_polars imported it successfully, so the test incorrectly expected ImportError.",
+      "targeted_rerun": "Passed when polars was imported before pytest collection (1 passed in 0.62s). A controlled full-suite rerun then passed 555 with 1 skipped.",
+      "classification": "Test/evidence nondeterminism caused by import-order-sensitive optional-dependency detection; no product exception was observed."
+    }
+  },
+  "server": {
+    "collected": 109,
+    "passed": 109,
+    "failed": 0,
+    "skipped": 0,
+    "duration_seconds": 31.359,
+    "warnings": 1,
+    "junit_sha256": "113708B30AF83E5020956B47368A358CDCB0E18583708F965B292284D3346F28",
+    "warning": "StarletteDeprecationWarning: using httpx through starlette.testclient is deprecated; install httpx2 instead."
+  }
+}

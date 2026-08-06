@@ -1,0 +1,353 @@
+{
+  "baselines": {
+    "contextql": "a054c8fcc576f3913d98d664ddf71eeea56d9755",
+    "contextql_server": "78c9565c33237a21dbf87f11d92ac6c7f29a846e"
+  },
+  "environment": {
+    "contextql_package": "0.2.0",
+    "contextql_server_package": "0.1.0",
+    "duckdb": "1.5.5",
+    "pandas": "3.0.5",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "pytest": "9.1.1",
+    "python": "3.12.13 (main, Mar  3 2026, 15:01:35) [MSC v.1944 64 bit (AMD64)]"
+  },
+  "probes": [
+    {
+      "claim": "A standard SELECT without FROM passes through unchanged.",
+      "expected_evidence": "Parse success would support the broad pass-through claim.",
+      "observed": {
+        "error": "Unexpected character ';'",
+        "error_type": "ContextQLSyntaxError",
+        "ok": false
+      },
+      "probe_id": "P3-SQL-001"
+    },
+    {
+      "claim": "Malformed first input can be recovered so a later statement is parsed.",
+      "expected_evidence": "Recovery would return a tree containing the later valid statement.",
+      "observed": {
+        "error": "Unexpected character ';'",
+        "error_type": "ContextQLSyntaxError",
+        "ok": false
+      },
+      "probe_id": "P3-PAR-001"
+    },
+    {
+      "claim": "The whitepaper composite-context example without ON is accepted.",
+      "expected_evidence": "Parse success would support the whitepaper example.",
+      "observed": {
+        "error": "Unexpected character 'A'",
+        "error_type": "ContextQLSyntaxError",
+        "ok": false
+      },
+      "probe_id": "P3-DDL-001"
+    },
+    {
+      "claim": "The grammar/spec composite-context form with ON is accepted.",
+      "expected_evidence": "Parse success supports the current grammar/spec form.",
+      "observed": {
+        "ok": true,
+        "value": "start\n  create_context_stmt\n    CREATE\n    CONTEXT\n    qualified_name\n      identifier\tcombined\n    ON\n    identifier\tid\n    AS\n    compose_clause\n      COMPOSE\n      (\n      compose_item\n        qualified_name\n          identifier\tcontext_a\n      ,\n      compose_item\n        qualified_name\n          identifier\tcontext_b\n      )\n      WITH\n      STRATEGY\n      compose_strategy\tUNION\n  ;\n"
+      },
+      "probe_id": "P3-DDL-002"
+    },
+    {
+      "claim": "The whitepaper arrow-chain process-model syntax is accepted.",
+      "expected_evidence": "Parse success would support the whitepaper DDL reference.",
+      "observed": {
+        "error": "Unexpected character 'A'",
+        "error_type": "ContextQLSyntaxError",
+        "ok": false
+      },
+      "probe_id": "P3-PRO-001"
+    },
+    {
+      "claim": "The current EXPECTED PATH process-model syntax is accepted.",
+      "expected_evidence": "Parse success supports the grammar/spec form.",
+      "observed": {
+        "ok": true,
+        "value": "start\n  create_process_model_stmt\n    CREATE\n    PROCESS\n    MODEL\n    qualified_name\n      identifier\texpected_flow\n    FOR\n    EVENT\n    LOG\n    qualified_name\n      identifier\tevent_log\n    expected_path_clause\n      EXPECTED\n      PATH\n      (\n      string_literal\t'created'\n      ,\n      string_literal\t'completed'\n      )\n  ;\n"
+      },
+      "probe_id": "P3-PRO-002"
+    },
+    {
+      "claim": "select has a dedicated semantic model after parsing.",
+      "expected_evidence": "A non-UNKNOWN statement kind supports semantic-surface maturity.",
+      "observed": {
+        "ok": true,
+        "value": [
+          "SELECT"
+        ]
+      },
+      "probe_id": "P3-LAD-007"
+    },
+    {
+      "claim": "select executes through Engine.execute.",
+      "expected_evidence": "Successful execution supports executable maturity.",
+      "observed": {
+        "ok": true,
+        "value": {
+          "columns": [
+            "id"
+          ],
+          "records": [
+            {
+              "id": 1
+            }
+          ],
+          "rows": 1
+        }
+      },
+      "probe_id": "P3-EXE-008"
+    },
+    {
+      "claim": "explain_context has a dedicated semantic model after parsing.",
+      "expected_evidence": "A non-UNKNOWN statement kind supports semantic-surface maturity.",
+      "observed": {
+        "ok": true,
+        "value": [
+          "UNKNOWN"
+        ]
+      },
+      "probe_id": "P3-LAD-009"
+    },
+    {
+      "claim": "explain_context executes through Engine.execute.",
+      "expected_evidence": "Successful execution supports executable maturity.",
+      "observed": {
+        "error": "Executor supports SELECT queries and context DDL statements.",
+        "error_type": "ValueError",
+        "ok": false
+      },
+      "probe_id": "P3-EXE-010"
+    },
+    {
+      "claim": "create_event_log has a dedicated semantic model after parsing.",
+      "expected_evidence": "A non-UNKNOWN statement kind supports semantic-surface maturity.",
+      "observed": {
+        "ok": true,
+        "value": [
+          "CREATE_EVENT_LOG"
+        ]
+      },
+      "probe_id": "P3-LAD-011"
+    },
+    {
+      "claim": "create_event_log executes through Engine.execute.",
+      "expected_evidence": "Successful execution supports executable maturity.",
+      "observed": {
+        "error": "Executor supports SELECT queries and context DDL statements.",
+        "error_type": "ValueError",
+        "ok": false
+      },
+      "probe_id": "P3-EXE-012"
+    },
+    {
+      "claim": "create_process_model has a dedicated semantic model after parsing.",
+      "expected_evidence": "A non-UNKNOWN statement kind supports semantic-surface maturity.",
+      "observed": {
+        "ok": true,
+        "value": [
+          "CREATE_PROCESS_MODEL"
+        ]
+      },
+      "probe_id": "P3-LAD-013"
+    },
+    {
+      "claim": "create_process_model executes through Engine.execute.",
+      "expected_evidence": "Successful execution supports executable maturity.",
+      "observed": {
+        "error": "ERROR[E141] Undefined event log 'event_log' in CREATE PROCESS MODEL 'expected_flow'. Hint: Create or register the event log first.",
+        "error_type": "ValueError",
+        "ok": false
+      },
+      "probe_id": "P3-EXE-014"
+    },
+    {
+      "claim": "register_mcp has a dedicated semantic model after parsing.",
+      "expected_evidence": "A non-UNKNOWN statement kind supports semantic-surface maturity.",
+      "observed": {
+        "ok": true,
+        "value": [
+          "UNKNOWN"
+        ]
+      },
+      "probe_id": "P3-LAD-015"
+    },
+    {
+      "claim": "register_mcp executes through Engine.execute.",
+      "expected_evidence": "Successful execution supports executable maturity.",
+      "observed": {
+        "error": "Executor supports SELECT queries and context DDL statements.",
+        "error_type": "ValueError",
+        "ok": false
+      },
+      "probe_id": "P3-EXE-016"
+    },
+    {
+      "claim": "grant has a dedicated semantic model after parsing.",
+      "expected_evidence": "A non-UNKNOWN statement kind supports semantic-surface maturity.",
+      "observed": {
+        "ok": true,
+        "value": [
+          "UNKNOWN"
+        ]
+      },
+      "probe_id": "P3-LAD-017"
+    },
+    {
+      "claim": "grant executes through Engine.execute.",
+      "expected_evidence": "Successful execution supports executable maturity.",
+      "observed": {
+        "error": "Executor supports SELECT queries and context DDL statements.",
+        "error_type": "ValueError",
+        "ok": false
+      },
+      "probe_id": "P3-EXE-018"
+    },
+    {
+      "claim": "create_namespace has a dedicated semantic model after parsing.",
+      "expected_evidence": "A non-UNKNOWN statement kind supports semantic-surface maturity.",
+      "observed": {
+        "ok": true,
+        "value": [
+          "UNKNOWN"
+        ]
+      },
+      "probe_id": "P3-LAD-019"
+    },
+    {
+      "claim": "create_namespace executes through Engine.execute.",
+      "expected_evidence": "Successful execution supports executable maturity.",
+      "observed": {
+        "error": "Executor supports SELECT queries and context DDL statements.",
+        "error_type": "ValueError",
+        "ok": false
+      },
+      "probe_id": "P3-EXE-020"
+    },
+    {
+      "claim": "set has a dedicated semantic model after parsing.",
+      "expected_evidence": "A non-UNKNOWN statement kind supports semantic-surface maturity.",
+      "observed": {
+        "ok": true,
+        "value": [
+          "UNKNOWN"
+        ]
+      },
+      "probe_id": "P3-LAD-021"
+    },
+    {
+      "claim": "set executes through Engine.execute.",
+      "expected_evidence": "Successful execution supports executable maturity.",
+      "observed": {
+        "error": "Executor supports SELECT queries and context DDL statements.",
+        "error_type": "ValueError",
+        "ok": false
+      },
+      "probe_id": "P3-EXE-022"
+    },
+    {
+      "claim": "THEN performs candidate-scoped or temporal staged evaluation distinct from intersection.",
+      "expected_evidence": "A result distinguishable from set intersection is required for staged semantics.",
+      "observed": {
+        "ok": true,
+        "value": {
+          "columns": [
+            "id"
+          ],
+          "records": [
+            {
+              "id": 2
+            }
+          ],
+          "rows": 1
+        }
+      },
+      "probe_id": "P3-CTX-001"
+    },
+    {
+      "claim": "Multiple parsed statements remain present after semantic lowering.",
+      "expected_evidence": "Two semantic statement kinds support multi-statement lowering.",
+      "observed": {
+        "ok": true,
+        "value": [
+          "SELECT",
+          "SELECT"
+        ]
+      },
+      "probe_id": "P3-MUL-001"
+    },
+    {
+      "claim": "Engine.execute executes all statements in a multi-statement input.",
+      "expected_evidence": "Evidence must show both results or an explicit multi-result contract.",
+      "observed": {
+        "ok": true,
+        "value": {
+          "columns": [
+            "id"
+          ],
+          "records": [
+            {
+              "id": 1
+            }
+          ],
+          "rows": 1
+        }
+      },
+      "probe_id": "P3-MUL-002"
+    },
+    {
+      "claim": "Generated OpenAPI represents the current public HTTP surface.",
+      "expected_evidence": "Generated routes and app version provide observed API evidence.",
+      "observed": {
+        "ok": true,
+        "value": {
+          "routes": [
+            "DELETE /contexts/{name}",
+            "GET /audit/",
+            "GET /contexts/",
+            "GET /contexts/{name}",
+            "GET /contexts/{name}/history",
+            "GET /contexts/{name}/snapshots",
+            "GET /contexts/{name}/versions",
+            "GET /health",
+            "GET /identity-maps/",
+            "GET /identity-maps/{name}",
+            "GET /providers/",
+            "GET /providers/{name}",
+            "GET /providers/{name}/health",
+            "POST /contexts/",
+            "POST /contexts/{name}/activate",
+            "POST /contexts/{name}/preview",
+            "POST /contexts/{name}/refresh",
+            "POST /contexts/{name}/retire",
+            "POST /contexts/{name}/validate",
+            "POST /identity-maps/",
+            "POST /providers/",
+            "POST /providers/{name}/disable",
+            "POST /providers/{name}/enable",
+            "POST /query",
+            "POST /query/explain",
+            "PUT /contexts/{name}",
+            "PUT /providers/{name}"
+          ],
+          "version": "0.3.0"
+        }
+      },
+      "probe_id": "P3-API-001"
+    },
+    {
+      "claim": "Decision-count metadata matches the actual decision register.",
+      "expected_evidence": "The count can be compared with README/CLAUDE/status claims.",
+      "observed": {
+        "ok": true,
+        "value": {
+          "decision_headings": 101
+        }
+      },
+      "probe_id": "P3-DOC-001"
+    }
+  ]
+}
