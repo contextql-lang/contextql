@@ -15,6 +15,7 @@ The pair is an audit baseline, not a general compatibility guarantee. Scope and 
 2. [`METHODOLOGY.md`](METHODOLOGY.md) — governing process, authority rules, maturity model, and later phases.
 3. [`phase4/PHASE_4_TRACEABILITY.md`](phase4/PHASE_4_TRACEABILITY.md) — claim-to-evidence join and coverage.
 4. [`phase4/ADVERSARIAL_REVIEW.md`](phase4/ADVERSARIAL_REVIEW.md) — high-risk challenge and decision docket.
+5. [`phase5/PHASE_5_CLASSIFICATION.md`](phase5/PHASE_5_CLASSIFICATION.md) — normalized gaps, truth repairs, and decision preparation.
 
 ## Phase artifacts
 
@@ -25,13 +26,15 @@ The pair is an audit baseline, not a general compatibility guarantee. Scope and 
 | 2 — Implementation inventories | [`phase2/CORE_IMPLEMENTATION_INVENTORY.md`](phase2/CORE_IMPLEMENTATION_INVENTORY.md), [`phase2/SERVER_IMPLEMENTATION_INVENTORY.md`](phase2/SERVER_IMPLEMENTATION_INVENTORY.md) | [`phase2/core_capabilities.csv`](phase2/core_capabilities.csv), [`phase2/server_capabilities.csv`](phase2/server_capabilities.csv) |
 | 3 — Executable evidence | [`phase3/PHASE_3_EXECUTABLE_EVIDENCE.md`](phase3/PHASE_3_EXECUTABLE_EVIDENCE.md) | [`phase3/probes.json`](phase3/probes.json), [`phase3/test_results.json`](phase3/test_results.json) |
 | 4 — Traceability join | [`phase4/PHASE_4_TRACEABILITY.md`](phase4/PHASE_4_TRACEABILITY.md), [`phase4/ADVERSARIAL_REVIEW.md`](phase4/ADVERSARIAL_REVIEW.md) | [`phase4/traceability.csv`](phase4/traceability.csv), [`phase4/high_risk_findings.csv`](phase4/high_risk_findings.csv) |
+| 5 — Gap classification | [`phase5/PHASE_5_CLASSIFICATION.md`](phase5/PHASE_5_CLASSIFICATION.md), [`phase5/TRUTH_REPAIR_QUEUE.md`](phase5/TRUTH_REPAIR_QUEUE.md), decision dockets | [`phase5/gap_register.csv`](phase5/gap_register.csv), [`phase5/truth_repairs.csv`](phase5/truth_repairs.csv), decision CSVs |
 
 ## Reproducibility tools
 
 - [`tools/extract_claims.ps1`](tools/extract_claims.ps1) regenerates the Phase 1 corpus.
 - [`tools/run_phase3_probes.py`](tools/run_phase3_probes.py) regenerates the Phase 3 behavioral probes.
 - [`tools/join_claims.py`](tools/join_claims.py) regenerates the Phase 4 traceability matrix.
+- [`tools/build_gap_register.py`](tools/build_gap_register.py) regenerates the Phase 5 material gap register.
 
 ## Interpretation boundary
 
-These artifacts establish traceable evidence. They do not adjudicate intended semantics, change product code, or rewrite the whitepaper. Those actions begin in Phase 5 after the design authority resolves the decision docket.
+These artifacts establish traceable evidence and classify material gaps. They do not adjudicate intended semantics, change product code, or rewrite the whitepaper. Adjudication follows the Phase 5 decision dockets and requires explicit design-authority decisions.
